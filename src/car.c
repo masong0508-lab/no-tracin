@@ -6,6 +6,7 @@
 // (arcade-heavy so jumps land inside the city).
 #include "car.h"
 #include "world.h"
+#include "track.h"
 
 #define G           car_g     // gravity, Q8 units per step^2 (35 = 2.5 g)
 #define GRIP        car_grip  // max sideways velocity change per step (38 = ~1.1 g)
@@ -55,6 +56,7 @@ static s32 slope(s32 here, s32 ahead, s32 behind)
 
 static void gradient(s32 ux, s32 uz, s32 base, s32 *gx, s32 *gz)
 {
+    if (g_track) { track_gradient(ux, uz, gx, gz); return; }
     s32 here = surf(ux, uz, base);
     *gx = slope(here, surf(ux + 8, uz, base), surf(ux - 8, uz, base));
     *gz = slope(here, surf(ux, uz + 8, base), surf(ux, uz - 8, base));
@@ -193,6 +195,8 @@ static void ground_step(Car *c, u16 keys)
     if (c->boost) along += 22;              // nitro
     along -= (vlong * iabs(vlong)) >> 21;   // air drag
     along -= vlong >> 10;                   // rolling resistance
+    if (g_track && world_surface(ux, uz) == SURF_GRASS)
+        along -= vlong >> 6;                // grass off the circuit slows you right down
     vlong += along;
 
     // Tyres cancel sideways motion up to their grip; beyond that the car slides.
@@ -263,7 +267,7 @@ static void ground_step(Car *c, u16 keys)
 
     // The loop: crossing its entry line lined up and moving forward.
     const Loop *l = &the_loop;
-    if ((c->z >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
+    if (!g_track && (c->z >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
         iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256) {
         c->x = nx; c->z = nz;
         enter_loop(c, vlong);
@@ -296,7 +300,7 @@ static void ground_step(Car *c, u16 keys)
         s32 sx = nx >> 8, sz = nz >> 8;
         // In the Stunt Park the lap logic picks the restart point.
         s32 in_park = sx > PARK_X0 && sx < PARK_X1 && sz > PARK_Z0 && sz < PARK_Z1;
-        if (!in_park && c->mode == CAR_GROUND && hnew == 0 && gx == 0 && gz == 0 &&
+        if (!g_track && !in_park && c->mode == CAR_GROUND && hnew == 0 && gx == 0 && gz == 0 &&
             !world_in_water(sx, sz)) {
             c->safe_x = sx;
             c->safe_z = sz;
@@ -681,7 +685,8 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
 {
     static const s8 shape[6][2] = { { -17, 46 }, { 17, 46 }, { 24, 0 }, { 17, -46 }, { -17, -46 }, { -24, 0 } };
     if (world_in_water(x, z)) return;
-    s32 above = (c->y >> 8) - (world_height(x, z) >> 8);
+    s32 ground = world_height(x, z);
+    s32 above = (c->y >> 8) - (ground >> 8);
     if (above > 400) return;
     s32 size = 256 - above / 3;
     s32 fx = isin(h), fz = icos(h), flat = 1;
@@ -690,13 +695,50 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
         s32 lx = (shape[i][0] * size) >> 8, lz = (shape[i][1] * size) >> 8;
         q[i].x = x + ((lx * fz + lz * fx) >> 14);
         q[i].z = z + ((lz * fz - lx * fx) >> 14);
-        s32 g = world_height(q[i].x, q[i].z);
+        s32 g = g_track ? ground : world_height(q[i].x, q[i].z);   // circuits: flat across the car
         if (g < 0) g = 0;
         q[i].y = (g >> 8) + (g ? 2 : 0);
         if (g) flat = 0;
     }
     if (flat) r_ground(q, 6, COLOR(M_SHADOW, 0));
     else      r_face(q, 6, COLOR(M_SHADOW, 0), RF_DECAL);
+}
+
+// CPU rivals: the same car in another colour, with a cheaper version far off.
+#define RIVAL_COLORS 7
+static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
+static const u8 rival_mats[RIVAL_COLORS] = { M_STUNT_WHITE, M_BLD2, M_LINE, M_BLD5, M_BLD4, M_GLASS, M_BLD0 };
+
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth)
+{
+    color %= RIVAL_COLORS;
+    u8 *g = rival_faces[color];
+    if (!g[0]) {
+        const u8 *f = car_faces;
+        for (s32 i = 0; i < CAR_FACES; i++) {
+            s32 n = (f[0] & 7) + 2;
+            for (s32 k = 0; k < n; k++) g[k] = f[k];
+            if (f[1] / 4 == M_CAR) g[1] = COLOR(rival_mats[color], f[1] & 3);
+            f += n;
+            g += n;
+        }
+        g = rival_faces[color];
+    }
+    s32 m[9];
+    car_matrix(heading >> 6, pitch, 0, m);
+    if (depth < 320) {
+        if (depth < 200) {
+            wheel(x, y, z, m, -17, -30);
+            wheel(x, y, z, m, 17, -30);
+            wheel(x, y, z, m, -17, 30);
+            wheel(x, y, z, m, 17, 30);
+        }
+        const Mesh mesh = { car_verts, g, sizeof(car_verts) / 3, CAR_FACES };
+        r_mesh(x, y, z, m, &mesh);
+    } else {
+        r_box_mat(x, y, z, m, -20, 4, -44, 20, 16, 44, rival_mats[color]);
+        if (depth < 600) r_box_mat(x, y, z, m, -15, 16, -20, 15, 28, 0, M_GLASS);
+    }
 }
 
 void car_draw(const Car *c, s32 ghost)

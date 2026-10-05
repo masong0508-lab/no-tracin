@@ -42,6 +42,9 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading);
 void car_respawn(Car *c);
 void car_step(Car *c, u16 keys);
 void car_draw(const Car *c, s32 ghost);
+// A CPU rival at (x, y, z) facing `heading` (65536 units), pitched by `pitch`
+// (1024 units); `depth` picks the detail.
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth);
 s32  car_speed(const Car *c);   // Q8 units per step, always positive
 
 #endif

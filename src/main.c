@@ -9,6 +9,8 @@
 #include "sound.h"
 #include "game.h"
 #include "menu.h"
+#include "track.h"
+#include "race.h"
 
 #define STEP_CYCLES 280896   // one 60 Hz physics step in CPU cycles
 #define OBJ_ON      0x1000
@@ -173,60 +175,195 @@ void present(void)
     g_frames++;
 }
 
-// ---------------------------------------------------------------- title
+// ---------------------------------------------------------------- front end
 
-// Returns the save slot to continue from, or -1 for a fresh start.
-static s32 title_screen(void)
+// Menu colours (fixed palette entries, untouched by the time of day).
+#define C_YELLOW COLOR(M_HUD, 0)
+#define C_WHITE  COLOR(M_HUD, 1)
+#define C_GREY   COLOR(M_HUD, 2)
+#define C_CYAN   COLOR(M_HUD, 3)
+#define C_PANEL  COLOR(M_HUD_BG, 0)
+#define C_HILITE COLOR(M_HUD_BG, 1)
+#define C_INK    COLOR(M_HUD_BG, 2)
+#define C_RED    COLOR(M_HUD_BG, 3)
+
+static void panel(volatile u16 *page, s32 x0, s32 y0, s32 x1, s32 y1, u32 c)
 {
-    static const char *const items[4] = { "DRIVE", "LOAD GAME", "OPTIONS", "RECORDS" };
-    Camera cam;
-    s32 t = 0, sel = 0;
-    u16 prev = ~REG_KEYINPUT;
-    const s32 cx = (PARK_X0 + PARK_X1) / 2, cz = (PARK_Z0 + PARK_Z1) / 2;
-    sound_silence();
-    for (;;) {
-        u16 keys = ~REG_KEYINPUT, pressed = keys & ~prev;
-        prev = keys;
-        if (pressed & KEY_UP)   { sel = (sel + 3) % 4; sound_play(SFX_BEEP); }
-        if (pressed & KEY_DOWN) { sel = (sel + 1) % 4; sound_play(SFX_BEEP); }
-        if (pressed & (KEY_A | KEY_START)) {
-            if (sel == 0) break;
-            menu_freeze();
-            if (sel == 1) {
-                s32 slot = menu_slot("LOAD GAME", 0);
-                if (slot >= 0) { sound_play(SFX_START); return slot; }
-            } else if (sel == 2) menu_options();
-            else menu_records();
-            prev = ~REG_KEYINPUT;
-        }
-        if (g_opt[OPT_PAINT] == PAINT_RAINBOW) r_set_paint(paint_color(t));
-
-        // Slow orbit around the Stunt Park.
-        s32 a = t * 2;
-        look_at(&cam, (cx - ((isin(a) * 1100) >> 14)) << 8, 420 << 8,
-                (cz - ((icos(a) * 1100) >> 14)) << 8, cx << 8, 0, cz << 8);
-        r_begin(back_page(), &cam);
-        world_draw(cx, cz);
-        r_flush();
-
-        hud_begin();
-        hud_text_huge(14, "NO TRACIN'", PAL_YELLOW);
-        hud_text_centered(44, "STUNT CITY", 1, PAL_WHITE);
-        for (s32 i = 0; i < 4; i++) {
-            s32 on = i == sel;
-            hud_text_centered(72 + i * 14, items[i], 0, on ? PAL_YELLOW : PAL_WHITE);
-            if (on) {
-                s32 w = hud_text_width(items[i], 0) / 2;
-                hud_text(120 - w - 12, 72 + i * 14, ">", 0, PAL_YELLOW);
-                hud_text(120 + w + 6, 72 + i * 14, "<", 0, PAL_YELLOW);
-            }
-        }
-        hud_text_centered(148, "A GAS B BRAKE L DRIFT R NITRO", 0, PAL_WHITE);
-        present();
-        t++;
+    u16 pair = c | (c << 8);
+    if (y0 < 0) y0 = 0;
+    if (y1 > SCREEN_H) y1 = SCREEN_H;
+    for (s32 y = y0; y < y1; y++) {
+        volatile u16 *row = page + y * (SCREEN_W / 2);
+        for (s32 x = x0 >> 1; x < (x1 >> 1); x++) row[x] = pair;
     }
-    sound_play(SFX_START);
-    return -1;
+}
+
+// A box with a one-pixel border.
+static void box(volatile u16 *page, s32 x0, s32 y0, s32 x1, s32 y1, u32 fill, u32 edge)
+{
+    panel(page, x0, y0, x1, y1, edge);
+    panel(page, x0 + 2, y0 + 1, x1 - 2, y1 - 1, fill);
+}
+
+// The arcade look: a red band across the top with the screen's name.
+static void header(volatile u16 *page, const char *title)
+{
+    panel(page, 0, 4, SCREEN_W, 26, C_RED);
+    panel(page, 0, 26, SCREEN_W, 28, C_YELLOW);
+    hud_text_centered(9, title, 1, PAL_WHITE);
+}
+
+// Camera gliding along a circuit (title and menu backdrops).
+static void flyover(Camera *cam, s32 t, s32 *focus_x, s32 *focus_z)
+{
+    s32 d = t * 9, x, z, y, h, hint = 0, tx, tz, ty;
+    track_point(d, -60, &x, &z, &y, &h, &hint);
+    track_point(d + 420, 20, &tx, &tz, &ty, &h, &hint);
+    look_at(cam, x << 8, y + (70 << 8), z << 8, tx << 8, ty + (10 << 8), tz << 8);
+    *focus_x = x;
+    *focus_z = z;
+}
+
+static void scene_frame(s32 t)
+{
+    Camera cam;
+    s32 fx, fz;
+    flyover(&cam, t, &fx, &fz);
+    r_begin(back_page(), &cam);
+    world_draw(fx, fz);
+    r_flush();
+}
+
+static u16 pressed_keys(u16 *prev)
+{
+    u16 keys = ~REG_KEYINPUT & 0x3FF, p = keys & ~*prev;
+    *prev = keys;
+    return p;
+}
+
+static void show_track(s32 i)
+{
+    if (g_track != &g_tracks[i]) {
+        track_load(i);
+        options_apply();
+    }
+}
+
+static void title_screen(s32 *t)
+{
+    u16 prev = ~REG_KEYINPUT;
+    sound_silence();
+    show_track(0);
+    for (;;) {
+        u16 p = pressed_keys(&prev);
+        if (p & (KEY_START | KEY_A)) { sound_play(SFX_START); return; }
+        scene_frame(*t);
+        hud_begin();
+        hud_text_huge(26, "NO TRACIN'", PAL_YELLOW);
+        hud_text_centered(56, "VIRTUA EDITION", 1, PAL_WHITE);
+        if ((*t >> 5) & 1) hud_text_centered(112, "PRESS START", 1, PAL_YELLOW);
+        hud_text_centered(148, "3 COURSES  7 RIVALS  STUNT CITY", 0, PAL_WHITE);
+        present();
+        (*t)++;
+    }
+}
+
+enum { MODE_ARCADE, MODE_FREE, MODE_CITY, MODE_LOAD, MODE_OPTIONS, MODE_RECORDS, MODE_COUNT };
+
+// Returns a MODE_*, or -1 to go back to the title.
+static s32 mode_select(s32 *t, s32 *sel)
+{
+    static const char *const names[MODE_COUNT] = {
+        "ARCADE", "FREE RUN", "STUNT CITY", "LOAD GAME", "OPTIONS", "RECORDS",
+    };
+    static const char *const about[MODE_COUNT][2] = {
+        { "RACE 7 CARS", "BEAT THE CLOCK" }, { "PRACTICE LAPS", "NO TIME LIMIT" },
+        { "FREE ROAM", "STUNTS + LOOP" }, { "STUNT CITY", "SAVE SLOTS" },
+        { "GAME SETUP", "" }, { "STUNT RECORDS", "" },
+    };
+    u16 prev = ~REG_KEYINPUT;
+    for (;;) {
+        u16 p = pressed_keys(&prev);
+        if (p & KEY_UP)   { *sel = (*sel + MODE_COUNT - 1) % MODE_COUNT; sound_play(SFX_BEEP); }
+        if (p & KEY_DOWN) { *sel = (*sel + 1) % MODE_COUNT; sound_play(SFX_BEEP); }
+        if (p & KEY_B) return -1;
+        if (p & (KEY_A | KEY_START)) { sound_play(SFX_CHECKPOINT); return *sel; }
+
+        scene_frame(*t);
+        volatile u16 *page = back_page();
+        hud_begin();
+        header(page, "MODE SELECT");
+        for (s32 i = 0; i < MODE_COUNT; i++) {
+            s32 y = 36 + i * 18, on = i == *sel;
+            box(page, 10, y, 122, y + 15, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
+            hud_text(20, y + 4, names[i], 0, on ? PAL_YELLOW : PAL_WHITE);
+        }
+        box(page, 130, 36, 230, 84, C_PANEL, C_CYAN);
+        hud_text(138, 44, about[*sel][0], 0, PAL_CYAN);
+        hud_text(138, 56, about[*sel][1], 0, PAL_WHITE);
+        if ((*t >> 4) & 1 && *sel < 2) hud_text(138, 72, "3 COURSES", 0, PAL_YELLOW);
+        hud_text_centered(150, "A SELECT  B BACK", 0, PAL_WHITE);
+        present();
+        (*t)++;
+    }
+}
+
+// Returns the circuit to race on, or -1 for back.
+static s32 course_select(s32 *t, s32 *sel, s32 mode)
+{
+    static const u8 level_pal[TRACK_COUNT] = { PAL_GREEN, PAL_YELLOW, PAL_RED };
+    u16 prev = ~REG_KEYINPUT;
+    for (;;) {
+        u16 p = pressed_keys(&prev);
+        if (p & KEY_LEFT)  { *sel = (*sel + TRACK_COUNT - 1) % TRACK_COUNT; sound_play(SFX_BEEP); *t = 0; }
+        if (p & KEY_RIGHT) { *sel = (*sel + 1) % TRACK_COUNT; sound_play(SFX_BEEP); *t = 0; }
+        if (p & KEY_B) return -1;
+        if (p & (KEY_A | KEY_START)) { sound_play(SFX_START); return *sel; }
+        show_track(*sel);
+        const TrackDef *td = &g_tracks[*sel];
+
+        scene_frame(*t);
+        volatile u16 *page = back_page();
+        hud_begin();
+        header(page, mode == MODE_ARCADE ? "ARCADE" : "FREE RUN");
+        for (s32 i = 0; i < TRACK_COUNT; i++) {
+            s32 x0 = 4 + i * 78, on = i == *sel;
+            box(page, x0, 34, x0 + 76, 50, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
+            hud_text(x0 + 38 - hud_text_width(g_tracks[i].name, 0) / 2, 39, g_tracks[i].name, 0,
+                     on ? PAL_YELLOW : PAL_WHITE);
+        }
+        // Course map with a dot following the camera, and the course facts.
+        box(page, 6, 56, 116, 142, C_PANEL, C_CYAN);
+        track_map(page, *sel, 10, 60, 102, 78, C_WHITE, (*t * 9) % td->lap, C_YELLOW);
+        box(page, 122, 56, 234, 142, C_PANEL, C_CYAN);
+        char buf[24], *q;
+        hud_text(130, 62, td->level, 0, level_pal[*sel]);
+        q = put(buf, "LAPS ");
+        if (mode == MODE_ARCADE) put_num(q, td->laps); else put(q, "FREE");
+        hud_text(130, 76, buf, 0, PAL_WHITE);
+        q = put(buf, "LENGTH ");
+        q = put_num(q, td->lap / 20 / 1000);
+        q = put(q, ".");
+        q = put_num(q, (td->lap / 20 / 100) % 10);
+        put(q, " KM");
+        hud_text(130, 88, buf, 0, PAL_WHITE);
+        hud_text(130, 102, "BEST LAP", 0, PAL_CYAN);
+        s32 b = race_best_lap(*sel);
+        if (b) { q = put_num(buf, b / 3600); *q++ = '\''; *q++ = '0' + (b / 60 % 60) / 10; *q++ = '0' + b / 60 % 10;
+                 *q++ = '"'; *q++ = '0' + (b % 60 * 100 / 60) / 10; *q++ = '0' + (b % 60 * 100 / 60) % 10; *q = 0; }
+        else put(buf, "--");
+        hud_text_right(228, 102, buf, 0, PAL_WHITE);
+        hud_text(130, 116, "BEST RACE", 0, PAL_CYAN);
+        b = race_best_time(*sel);
+        if (b) { q = put_num(buf, b / 3600); *q++ = '\''; *q++ = '0' + (b / 60 % 60) / 10; *q++ = '0' + b / 60 % 10;
+                 *q++ = '"'; *q++ = '0' + (b % 60 * 100 / 60) / 10; *q++ = '0' + (b % 60 * 100 / 60) % 10; *q = 0; }
+        else put(buf, "--");
+        hud_text_right(228, 128, buf, 0, PAL_WHITE);
+        hud_text(10, 150, "< >", 0, (*t >> 3) & 1 ? PAL_YELLOW : PAL_WHITE);
+        hud_text_right(234, 150, "A RACE  B BACK", 0, PAL_WHITE);
+        present();
+        (*t)++;
+    }
 }
 
 // ---------------------------------------------------------------- HUD
@@ -236,6 +373,17 @@ static void draw_hud(const Car *car, const Camera *cam, s32 view, s32 label_time
     static const char *const view_names[VIEW_COUNT] = { "CHASE", "FAR CHASE", "OVERHEAD", "COCKPIT" };
     const Game *g = &g_game;
     char buf[24], *p;
+
+    if (g_track) {
+        if (countdown > 0) hud_text_huge(60, countdown > 120 ? "3" : countdown > 60 ? "2" : "1", PAL_YELLOW);
+        else if (g->msg_timer > 0) {
+            hud_text_centered(56, g->msg1, 1, g->msg_pal);
+            if (g->msg2[0]) hud_text_centered(74, g->msg2, 0, PAL_WHITE);
+        }
+        if (label_timer > 0) hud_text_centered(120, view_names[view], 0, PAL_WHITE);
+        (void)cam;
+        return;
+    }
 
     // Speed, revs and gear.
     s32 mph = (car_speed(car) * 67) / 2560;
@@ -355,14 +503,37 @@ static s32 pause_menu(Car *car, CamState *cs)
     }
 }
 
-static void play(s32 load_from)
+// Pause menu on a circuit: 0 resume, 1 quit, 2 restart.
+static s32 race_pause(void)
+{
+    static const char *const items[4] = { "RESUME", "RESTART RACE", "OPTIONS", "QUIT TO MENU" };
+    sound_silence();
+    menu_freeze();
+    for (;;) {
+        s32 i = menu_list("PAUSED", items, 4);
+        if (i <= 0) return 0;
+        if (i == 1) return 2;
+        if (i == 2) menu_options();
+        if (i == 3) {
+            if (!g_opt[OPT_AUTOSAVE]) save_system();
+            return 1;
+        }
+    }
+}
+
+// Drives Freedom City (track < 0) or a race on a circuit. Returns 1 when
+// the race should start again.
+static s32 play(s32 load_from, s32 track, s32 race_mode)
 {
     Car *car = &g_car;
-    car_reset(car, the_loop.x, PARK_Z0 + 36, 0);
+    track_load(track);
+    options_apply();
     game_reset();
     fx_reset();
+    if (track >= 0) race_begin(track, race_mode, car);
+    else car_reset(car, the_loop.x, PARK_Z0 + 36, 0);
     s32 countdown = 180;
-    if (load_from >= 0) {
+    if (track < 0 && load_from >= 0) {
         s32 score;
         if (load_slot(load_from, car, &score)) {
             g_game.score = score;
@@ -388,7 +559,10 @@ static void play(s32 load_from)
             cs.ready = 0;
         }
         if ((pressed & KEY_START) && countdown <= 0) {
-            if (pause_menu(car, &cs)) return;
+            if (g_track) {
+                s32 r = race_pause();
+                if (r) return r == 2;
+            } else if (pause_menu(car, &cs)) return 0;
             prev = ~REG_KEYINPUT;
             last = cycles();
             acc = 0;
@@ -397,6 +571,7 @@ static void play(s32 load_from)
 
         // Fixed 60 Hz physics, however long the last frame took to draw.
         // Game speed and air slow-mo stretch or shrink the step.
+        if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
         car->boost = (keys & KEY_R) && g_game.nitro > 0 && countdown <= 0 && car->mode != CAR_CRASH;
         u32 now = cycles();
         acc += now - last;
@@ -416,7 +591,7 @@ static void play(s32 load_from)
                 }
                 if (--countdown == 0) {
                     sound_play(SFX_GO);
-                    game_message("GO!", "CROSS THE LINE TO START A LAP", PAL_GREEN, 120);
+                    game_message("GO!", g_track ? "" : "CROSS THE LINE TO START A LAP", PAL_GREEN, 120);
                 }
             } else {
                 car_step(car, keys);
@@ -424,6 +599,7 @@ static void play(s32 load_from)
             fx_step(car);
             sound_step(car);
             game_step(car);
+            if (g_track) race_step(car, countdown <= 0);
             camera_step(&cs, car, view);
             acc -= len;
             steps++;
@@ -440,25 +616,37 @@ static void play(s32 load_from)
         camera_frame(&cam, &cs, car, view);
 
         r_begin(back_page(), &cam);
-        world_draw(car->x >> 8, car->z >> 8);
-        fx_draw_ground();
-        game_draw_world();
-        Car ghost;
-        if (!g_opt[OPT_GHOST] && game_ghost(&ghost)) car_draw(&ghost, 1);
+        if (g_track) {
+            race_draw_rivals();
+            world_draw(car->x >> 8, car->z >> 8);
+            fx_draw_ground();
+        } else {
+            world_draw(car->x >> 8, car->z >> 8);
+            fx_draw_ground();
+            game_draw_world();
+            Car ghost;
+            if (!g_opt[OPT_GHOST] && game_ghost(&ghost)) car_draw(&ghost, 1);
+        }
         if (view != VIEW_COCKPIT || car->mode == CAR_CRASH) car_draw(car, 0);
         r_flush();
 
         hud_begin();
+        if (g_track) race_hud(car, frame);
         draw_hud(car, &cam, view, label_timer, countdown);
-        game_draw_stars(frame);
+        if (!g_track) game_draw_stars(frame);
         fx_draw_sprites();
 
         // Pull the draw distance in when a frame comes close to two vblanks,
         // and let it back out while there is room. The haze hides the edge.
         u32 work = cycles() - frame_start;
-        if (work > 520000) r_far = r_far - 50 < R_FAR_MIN ? R_FAR_MIN : r_far - 50;
+        s32 far_min = g_track ? 950 : R_FAR_MIN;   // circuits draw more ground; let the haze in sooner
+        if (work > 520000) r_far = r_far - 50 < far_min ? far_min : r_far - 50;
         else if (work < 460000 && r_far < R_FAR_MAX) r_far += 10;
         present();
+        if (g_track && race_done()) {
+            race_results();
+            return 0;
+        }
     }
 }
 
@@ -475,5 +663,30 @@ int main(void)
     options_apply();
     REG_DISPCNT = MODE4 | BG2_ON | OBJ_ON | OBJ_1D;
 
-    for (;;) play(title_screen());
+    race_records_load();
+
+    s32 t = 0, mode = 0, course = 0;
+    for (;;) {
+        title_screen(&t);
+        for (;;) {
+            s32 m = mode_select(&t, &mode);
+            if (m < 0) break;
+            if (m == MODE_OPTIONS) { menu_freeze(); menu_options(); continue; }
+            if (m == MODE_RECORDS) { menu_freeze(); menu_records(); continue; }
+            if (m == MODE_CITY) { play(-1, -1, 0); show_track(course); continue; }
+            if (m == MODE_LOAD) {
+                menu_freeze();
+                s32 slot = menu_slot("LOAD GAME", 0);
+                if (slot >= 0) { sound_play(SFX_START); play(slot, -1, 0); show_track(course); }
+                continue;
+            }
+            for (;;) {
+                s32 c = course_select(&t, &course, m);
+                if (c < 0) break;
+                while (play(-1, c, m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE)) {}
+                show_track(course);
+                t = 0;
+            }
+        }
+    }
 }

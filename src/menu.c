@@ -306,6 +306,30 @@ void menu_records(void)
     }
 }
 
+void menu_table(const char *title, const char *const *left, const char *const *right,
+                const u8 *hilite, s32 n, const char *footer)
+{
+    s32 first = 1, frame = 0;
+    flush_keys();
+    for (;;) {
+        u16 k = menu_keys();
+        if (k & (KEY_A | KEY_B | KEY_START)) { sound_play(SFX_CHECKPOINT); return; }
+        frame++;
+        if (!(frame & 15)) first = 1;          // blink the highlights
+        if (idle(k, &first)) continue;
+        frame_begin(title, n + 1);
+        s32 y = menu_top(n + 1);
+        for (s32 i = 0; i < n; i++, y += 10) {
+            s32 on = hilite && hilite[i];
+            u32 c = on && (frame & 16) ? C_YELLOW : C_WHITE;
+            text(30, y, left[i], c, 1);
+            text_r(210, y, right[i], on ? C_YELLOW : C_CYAN);
+        }
+        text_c(y + 2, footer, C_GREY, 1);
+        frame_end();
+    }
+}
+
 // ---------------------------------------------------------------- cheats
 
 // Button codes, typed on the cheat screen. Not saved: they last until power off.
@@ -473,6 +497,24 @@ s32 load_slot(s32 slot, Car *c, s32 *score)
     *c = s.car;
     *score = s.score;
     return 1;
+}
+
+void save_blob(u32 magic, u32 at, const void *p, u32 n)
+{
+    u32 sum = checksum(p, n) ^ magic;
+    sram_write(at, &magic, 4);
+    sram_write(at + 4, p, n);
+    sram_write(at + 4 + n, &sum, 4);
+}
+
+s32 load_blob(u32 magic, u32 at, void *p, u32 n)
+{
+    u32 m, sum;
+    sram_read(at, &m, 4);
+    if (m != magic) return 0;
+    sram_read(at + 4, p, n);
+    sram_read(at + 4 + n, &sum, 4);
+    return sum == (checksum(p, n) ^ magic);
 }
 
 void save_erase(void)

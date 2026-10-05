@@ -85,9 +85,17 @@ void r_init(void);
 enum { THEME_DAY, THEME_SUNSET, THEME_NIGHT, THEME_SYNTHWAVE, THEME_GAMEBOY, THEME_COUNT };
 void r_init_palette(s32 theme, u16 paint);
 void r_set_paint(u16 paint);
+// Backdrop and ground colours for Freedom City or a race circuit. Takes
+// effect at the next r_init_palette.
+enum { SCENE_CITY, SCENE_FOREST, SCENE_BAY, SCENE_MOUNTAINS };
+void r_set_scene(s32 scene);
 void r_begin(volatile u16 *page, const Camera *cam);
 // A flat polygon lying on the ground, drawn immediately in submission order.
 void r_ground(const Vec3 *v, s32 n, u8 color);
+// The same with vertices already in camera space (see r_xform).
+void r_ground_cam(const Vec3 *cv, s32 n, u8 color);
+void r_xform(s32 x, s32 y, s32 z, Vec3 *out);          // world point to camera space
+void r_xform_dir(s32 dx, s32 dy, s32 dz, Vec3 *out);   // world direction (Q14) to camera space
 // A solid polygon, depth-sorted and drawn by r_flush. Vertices clockwise
 // as seen from the side that should be visible.
 #define RF_TWO_SIDED 1   // draw from both sides

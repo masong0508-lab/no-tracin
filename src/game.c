@@ -3,6 +3,7 @@
 #include "world.h"
 #include "sound.h"
 #include "hud.h"
+#include "track.h"
 
 Game g_game;
 Records g_rec;
@@ -373,6 +374,17 @@ void game_step(Car *c)
 {
     Game *g = &g_game;
     if (g->msg_timer > 0) g->msg_timer--;
+    if (g_track) {
+        // On a circuit the race keeps score; stunts just count for the records.
+        c->event = 0;
+        if (c->boost && !cheat_nitro) g->nitro -= 6;
+        if (g->nitro < 0) g->nitro = 0;
+        if (cheat_nitro) g->nitro = NITRO_MAX;
+        s32 mph = (car_speed(c) * 67) / 2560;
+        if (c->mode != CAR_CRASH && mph > g_rec.top_mph) g_rec.top_mph = mph;
+        if (++play_steps >= 60) { play_steps = 0; g_rec.play_secs++; }
+        return;
+    }
     if (g->combo_timer > 0 && --g->combo_timer == 0) g->combo = 0;
     drift(c);
     stunt_events(c);

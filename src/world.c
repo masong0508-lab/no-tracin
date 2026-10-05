@@ -1,6 +1,9 @@
 // Freedom City: building layout, the Stunt Park, street ramps, the height
 // field the physics drives on, wall collisions and drawing.
 #include "world.h"
+#include "track.h"
+
+extern volatile u32 g_frames;
 
 #define MAX_SOLIDS   1100
 #define MAX_FEATURES 48
@@ -213,6 +216,7 @@ static s32 lead_height(const Feature *f, s32 x, s32 z)
 
 s32 world_height(s32 x, s32 z)
 {
+    if (g_track) return track_height(x, z);
     s32 h = 0;
     const u8 *list;
     s32 n = features_at(x, z, &list);
@@ -244,6 +248,7 @@ s32 world_height(s32 x, s32 z)
 
 s32 world_in_water(s32 x, s32 z)
 {
+    if (g_track) return 0;
     const u8 *list;
     s32 n = features_at(x, z, &list);
     for (s32 k = 0; k < n; k++) {
@@ -256,6 +261,7 @@ s32 world_in_water(s32 x, s32 z)
 
 s32 world_surface(s32 x, s32 z)
 {
+    if (g_track) return track_surface(x, z);
     if (x < 0 || z < 0 || x >= WORLD || z >= WORLD) return SURF_ROAD;
     s32 bx = x / BLOCK, bz = z / BLOCK, lx = x - bx * BLOCK, lz = z - bz * BLOCK;
     s32 kind = block_kind[bz][bx];
@@ -275,6 +281,7 @@ static void deeper(s32 pen, s32 nx, s32 nz, s32 *best, s32 *bx, s32 *bz)
 
 s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
 {
+    if (g_track) return track_collide(x, z, radius, nx, nz);
     s32 best = 0;
     *nx = 0; *nz = 0;
 
@@ -564,6 +571,7 @@ IWRAM_CODE static void draw_block_ground(s32 bx, s32 bz, s32 near)
 
 IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
 {
+    if (g_track) { track_draw(focus_x, focus_z, g_frames); return; }
     u8 shown[BLOCKS * BLOCKS];
     s32 shown_count = 0;
 
