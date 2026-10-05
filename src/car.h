@@ -32,6 +32,8 @@ typedef struct {
     s32 trick_p, trick_r, trick_h;       // rotation done this jump: flips, rolls, spins
     s32 event_c, event_d, event_e;       // tricks landed: flips, rolls, spins
     s32 fly_v;              // airspeed with the fly cheat
+    s32 yaw_v;              // yaw rate, so the body takes a moment to turn in
+    s32 load;               // tyre load, 256 = resting (light over crests)
 } Car;
 
 // Tunables the options menu changes.

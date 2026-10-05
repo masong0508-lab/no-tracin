@@ -200,8 +200,17 @@ static void ground_step(Car *c, u16 keys)
     vlong += along;
 
     // Tyres cancel sideways motion up to their grip; beyond that the car slides.
+    // Grip shrinks when the tyres are also braking or driving hard (so trail
+    // braking or flooring it mid-corner can break traction), on grass, and when
+    // the car goes light over a crest.
     s32 hand = keys & KEY_L;
     s32 grip = hand ? HAND_GRIP : GRIP;
+    s32 lon = iabs(engine) + (c->boost ? 8 : 0);
+    if (!hand) grip -= lon / 3;
+    if (world_surface(ux, uz) == SURF_GRASS) grip = (grip * 5) >> 3;
+    if (c->load == 0) c->load = 256;
+    grip = (grip * c->load) >> 8;
+    if (grip < 6) grip = 6;
     vlat += alat;
     c->skid = 0;
     if (vlat > grip)       { vlat -= grip; c->skid = 1; }
@@ -220,6 +229,13 @@ static void ground_step(Car *c, u16 keys)
     s32 yaw = (vlong * c->steer) >> 8;
     if (c->skid && !hand) yaw = (yaw * 3) >> 2;     // front tyres sliding: understeer
     if (hand && sp > 768)  yaw = (yaw * 3) >> 1;     // handbrake: the tail steps out
+    // Weight transfer: braking loads the nose so it bites and the tail goes
+    // light; power squats the rear and pushes the nose wide.
+    if (engine < 0 && vlong > 512)       yaw = (yaw * 5) >> 2;
+    else if (engine > 8 && vlong > 256)  yaw = (yaw * 7) >> 3;
+    // The body has inertia, so it takes a moment to turn in and to settle.
+    c->yaw_v += (yaw - c->yaw_v) >> 1;
+    yaw = c->yaw_v;
     s32 align = vlat / 4;                            // a sliding car swings toward its path
     yaw += align > 200 ? 200 : align < -200 ? -200 : align;
     c->heading += yaw;
@@ -287,6 +303,10 @@ static void ground_step(Car *c, u16 keys)
         s32 vy = hnew - c->y;
         s32 vmax = (isqrt(c->vx * c->vx + c->vz * c->vz) * 5) / 8 + 64;
         if (vy > vmax) vy = vmax;
+        // Road curving away (crest) unloads the tyres, a dip loads them.
+        s32 load = 256 + ((vy - c->vy) * 256) / (G > 0 ? G : 1);
+        load = load < 96 ? 96 : load > 352 ? 352 : load;
+        c->load += (load - c->load) >> 2;
         c->bob_v -= (vy - c->vy) >> 2;
         c->vy = vy;
         c->y = hnew;
