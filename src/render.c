@@ -11,7 +11,7 @@
 #define BUCKETS   512      // depth buckets, 8 units each
 #define SUB       12       // fixed-point bits for edge walking
 #define RECIPS    (R_FAR_MAX * 2)
-#define LIMIT     16000    // projected coordinates are clamped to this
+#define LIMIT     32000    // projected coordinates are clamped to this
 
 #define PANO_W    944      // skyline panorama: about FOCAL * 2 * pi pixels round
 #define PANO_H    32
@@ -31,7 +31,18 @@ typedef struct {
 static Face faces[MAX_FACES];
 static s16  heads[BUCKETS];
 static s32  face_count;
-s32 r_far = R_FAR_MAX;
+s32 r_far = FAR_MENU, r_far_min = FAR_MENU, r_far_max = FAR_MENU;
+s32 r_fog1 = FOG1_TRACK, r_fog2 = FOG2_TRACK;
+
+void r_set_far(s32 far_min, s32 far_max, s32 fog1, s32 fog2)
+{
+    if (far_max > R_FAR_MAX) far_max = R_FAR_MAX;
+    if (far_min > far_max) far_min = far_max;
+    r_far = r_far_min = far_min;
+    r_far_max = far_max;
+    r_fog1 = fog1;
+    r_fog2 = fog2;
+}
 
 static volatile u16 *target;
 static s32 cam_x, cam_y, cam_z;
@@ -306,8 +317,8 @@ void r_set_paint(u16 paint)
 static inline __attribute__((always_inline)) u32 fog(u32 c, s32 depth)
 {
     if (c >= FOG1_BASE) return c;
-    if (depth > R_FOG2) return FOG2_BASE + (c >> 2);
-    if (depth > R_FOG1) return c + FOG1_BASE;
+    if (depth > r_fog2) return FOG2_BASE + (c >> 2);
+    if (depth > r_fog1) return c + FOG1_BASE;
     return c;
 }
 
@@ -425,7 +436,7 @@ static void draw_backdrop(s32 yaw)
         if (first < SCREEN_W / 2) copy16(row + first, &pano[k][0], SCREEN_W / 2 - first);
     }
     // Ground fades into the haze toward the horizon.
-    s32 r2 = ground_row(R_FOG2), r1 = ground_row(R_FOG1);
+    s32 r2 = ground_row(r_fog2), r1 = ground_row(r_fog1);
     if (r2 < horizon) r2 = horizon;
     if (r1 < r2) r1 = r2;
     fill_rows(horizon, r2, FOG2_BASE + ground_mat);

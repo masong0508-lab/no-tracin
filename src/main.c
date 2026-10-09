@@ -230,6 +230,7 @@ static void scene_frame(s32 t)
 {
     Camera cam;
     s32 fx, fz;
+    r_set_far(FAR_MENU, FAR_MENU, FOG1_TRACK, FOG2_TRACK);
     flyover(&cam, t, &fx, &fz);
     r_begin(back_page(), &cam);
     world_draw(fx, fz);
@@ -538,6 +539,8 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
     Car *car = &g_car;
     track_load(track);
     options_apply();
+    if (track >= 0) r_set_far(FAR_MIN_TRACK, FAR_MAX_TRACK, FOG1_TRACK, FOG2_TRACK);
+    else r_set_far(FAR_MIN_CITY, FAR_MAX_CITY, FOG1_CITY, FOG2_CITY);
     game_reset();
     fx_reset();
     if (track >= 0) race_begin(track, race_mode, car);
@@ -652,9 +655,8 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
         // Pull the draw distance in when a frame comes close to two vblanks,
         // and let it back out while there is room. The haze hides the edge.
         u32 work = cycles() - frame_start;
-        s32 far_min = g_track ? 950 : R_FAR_MIN;   // circuits draw more ground; let the haze in sooner
-        if (work > 520000) r_far = r_far - 50 < far_min ? far_min : r_far - 50;
-        else if (work < 460000 && r_far < R_FAR_MAX) r_far += 10;
+        if (work > 520000) r_far = r_far - 50 < r_far_min ? r_far_min : r_far - 50;
+        else if (work < 460000 && r_far < r_far_max) r_far += 10;
         present();
         if (g_track && race_done()) {
             race_results();

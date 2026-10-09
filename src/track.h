@@ -7,6 +7,7 @@
 #include "gba.h"
 
 #define TRACK_HALF_W 84       // half the road width
+#define TRACK_WORLD  8192     // circuits lie inside 0..TRACK_WORLD on x and z
 #define TRACK_COUNT  3
 
 // One sample along the centreline; the road runs from this point to the next.

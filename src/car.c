@@ -616,10 +616,11 @@ void car_step(Car *c, u16 keys)
     default:         crash_step(c);        break;
     }
     // Flying cheats can leave the map; keep the car over it.
+    s32 ext = g_track ? TRACK_WORLD : WORLD;
     if (c->x < (16 << 8)) { c->x = 16 << 8; c->vx = -c->vx / 2; }
     if (c->z < (16 << 8)) { c->z = 16 << 8; c->vz = -c->vz / 2; }
-    if (c->x > ((WORLD - 16) << 8)) { c->x = (WORLD - 16) << 8; c->vx = -c->vx / 2; }
-    if (c->z > ((WORLD - 16) << 8)) { c->z = (WORLD - 16) << 8; c->vz = -c->vz / 2; }
+    if (c->x > ((ext - 16) << 8)) { c->x = (ext - 16) << 8; c->vx = -c->vx / 2; }
+    if (c->z > ((ext - 16) << 8)) { c->z = (ext - 16) << 8; c->vz = -c->vz / 2; }
     if (c->y > (3000 << 8)) { c->y = 3000 << 8; if (c->vy > 0) c->vy = 0; }
 
     // Suspension travel settles back to rest.

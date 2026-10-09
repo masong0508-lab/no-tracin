@@ -44,7 +44,7 @@ static inline s32 barrier(const TrackPt *p) { return TRACK_HALF_W + p->verge; }
 s32 track_find(s32 x, s32 z, TrackHit *hit)
 {
     const TrackDef *t = g_track;
-    if (x < 0 || z < 0 || x >= 8192 || z >= 8192) return 0;
+    if (x < 0 || z < 0 || x >= TRACK_WORLD || z >= TRACK_WORLD) return 0;
     s32 cell = (z >> 7) * 64 + (x >> 7);
     s32 n = t->cell_count[cell];
     if (!n) return 0;
