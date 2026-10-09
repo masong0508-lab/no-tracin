@@ -21,19 +21,24 @@ typedef struct { s16 x0, z0, x1, z1, h; u8 material; } Solid;
 enum { F_RAMP, F_WATER, F_BANK, F_BANKLEAD };
 typedef struct { u8 type, axis; s16 x0, z0, x1, z1, h0, h1; } Feature;
 
+// The world's tables live in EWRAM: IWRAM is kept for code and the stack.
 static Solid   solids[MAX_SOLIDS] EWRAM_BSS;
 static s32     solid_count;
-static Feature features[MAX_FEATURES];
+static Feature features[MAX_FEATURES] EWRAM_BSS;
 static s32     feature_count;
-static u8      block_kind[BLOCKS][BLOCKS];
+static u8      block_kind[BLOCKS][BLOCKS] EWRAM_BSS;
 // Features touching each block, so height and wall queries only look at
 // the few that can matter.
 #define MAX_FEAT_REFS 320
-static u8      feat_refs[MAX_FEAT_REFS];
-static u16     cell_first[BLOCKS][BLOCKS];
-static u8      cell_count[BLOCKS][BLOCKS];
-static u16     block_first[BLOCKS][BLOCKS];
-static u8      block_count[BLOCKS][BLOCKS];
+static u8      feat_refs[MAX_FEAT_REFS] EWRAM_BSS;
+static u16     cell_first[BLOCKS][BLOCKS] EWRAM_BSS;
+static u8      cell_count[BLOCKS][BLOCKS] EWRAM_BSS;
+static u16     block_first[BLOCKS][BLOCKS] EWRAM_BSS;
+static u8      block_count[BLOCKS][BLOCKS] EWRAM_BSS;
+// Anything the tables had no room for (solids, features, refs, faces). The
+// city is built the same way every boot, so a test that reads 0 here once
+// proves nothing is ever dropped.
+s32 world_overflow EWRAM_BSS;
 
 const Loop the_loop = { 820, 1550, 120, 100, 84 };
 
@@ -59,14 +64,14 @@ static s32 in_park(s32 x, s32 z, s32 margin)
 
 static void add_solid(s32 x0, s32 z0, s32 x1, s32 z1, s32 h, s32 material)
 {
-    if (solid_count >= MAX_SOLIDS) return;
+    if (solid_count >= MAX_SOLIDS) { world_overflow++; return; }
     Solid *s = &solids[solid_count++];
     s->x0 = x0; s->z0 = z0; s->x1 = x1; s->z1 = z1; s->h = h; s->material = material;
 }
 
 static void add_feature(s32 type, s32 axis, s32 x0, s32 z0, s32 x1, s32 z1, s32 h0, s32 h1)
 {
-    if (feature_count >= MAX_FEATURES) return;
+    if (feature_count >= MAX_FEATURES) { world_overflow++; return; }
     Feature *f = &features[feature_count++];
     f->type = type; f->axis = axis;
     f->x0 = x0; f->z0 = z0; f->x1 = x1; f->z1 = z1; f->h0 = h0; f->h1 = h1;
@@ -174,6 +179,7 @@ static void index_features(void)
                     z1 + margin < bz * BLOCK || z0 - margin >= (bz + 1) * BLOCK)
                     continue;
                 if (refs < MAX_FEAT_REFS) feat_refs[refs++] = i;
+                else world_overflow++;
             }
             cell_count[bz][bx] = refs - cell_first[bz][bx];
         }
@@ -394,12 +400,12 @@ typedef struct {
 #define MAX_WORLD_FACES 320
 static WorldFace world_faces[MAX_WORLD_FACES] EWRAM_BSS;
 static s32 world_face_count;
-static u16 feat_face_first[MAX_FEATURES + 1];   // the loop goes last
-static u8  feat_face_count[MAX_FEATURES + 1];
+static u16 feat_face_first[MAX_FEATURES + 1] EWRAM_BSS;   // the loop goes last
+static u8  feat_face_count[MAX_FEATURES + 1] EWRAM_BSS;
 
 static void add_face(const Vec3 *q, s32 n, u8 color, u32 flags)
 {
-    if (world_face_count >= MAX_WORLD_FACES) return;
+    if (world_face_count >= MAX_WORLD_FACES) { world_overflow++; return; }
     WorldFace *w = &world_faces[world_face_count++];
     s32 cx = 0, cz = 0, r = 0;
     for (s32 i = 0; i < 4; i++) {
@@ -591,14 +597,20 @@ IWRAM_CODE static void draw_block_ground(s32 bx, s32 bz, s32 near)
     if (kind == 0) ground_rect(ix0, iz0, ix1, iz1, COLOR(M_GRASS, 0));
 }
 
+// Blocks drawn this frame, as (bx, bz) pairs. The scan never reaches
+// further than RANGE_MAX blocks from the focus.
+#define RANGE_MAX ((R_FAR_MAX + 400) / BLOCK + 1)
+#define MAX_SHOWN ((2 * RANGE_MAX + 1) * (2 * RANGE_MAX + 1))
+static u8 shown[MAX_SHOWN][2] EWRAM_BSS;
+
 IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
 {
     if (g_track) { track_draw(focus_x, focus_z, g_frames); return; }
-    u8 shown[BLOCKS * BLOCKS];
     s32 shown_count = 0;
 
     // Only blocks within drawing range of the camera (which is near the focus).
-    const s32 range = (r_far + 400) / BLOCK + 1;
+    s32 range = (r_far + 400) / BLOCK + 1;
+    if (range > RANGE_MAX) range = RANGE_MAX;
     s32 bx0 = focus_x / BLOCK - range, bx1 = focus_x / BLOCK + range;
     s32 bz0 = focus_z / BLOCK - range, bz1 = focus_z / BLOCK + range;
     if (bx0 < 0) bx0 = 0;
@@ -611,7 +623,8 @@ IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
         for (s32 bx = bx0; bx <= bx1; bx++) {
             s32 cx = bx * BLOCK + BLOCK / 2, cz = bz * BLOCK + BLOCK / 2;
             if (!visible(cx, cz, BLOCK * 3 / 4)) continue;
-            shown[shown_count++] = bz * BLOCKS + bx;
+            shown[shown_count][0] = bx;
+            shown[shown_count++][1] = bz;
             if (block_kind[bz][bx] == KIND_PARK) continue;
             s32 side;
             draw_block_ground(bx, bz, r_depth(cx, cz, &side) < 900);
@@ -662,7 +675,7 @@ IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
 
     // Buildings.
     for (s32 b = 0; b < shown_count; b++) {
-        s32 bz = shown[b] / BLOCKS, bx = shown[b] % BLOCKS;
+        s32 bx = shown[b][0], bz = shown[b][1];
         s32 first = block_first[bz][bx], end = first + block_count[bz][bx];
         for (s32 i = first; i < end; i++) {
             const Solid *s = &solids[i];
