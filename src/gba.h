@@ -119,6 +119,8 @@ typedef struct {
     u8 vert_count, face_count;
 } Mesh;
 void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh);
+// The same model with its vertices already placed in the world (a bent car).
+void r_mesh_world(const Vec3 *v, const Mesh *mesh);
 extern s32 r_far;      // current draw distance, R_FAR_MIN..R_FAR_MAX
 // Returns camera-space depth of a world point (for culling).
 s32  r_depth(s32 x, s32 z, s32 *side);

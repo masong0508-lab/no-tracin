@@ -40,6 +40,7 @@ s32 world_surface(s32 x, s32 z);
 // Pushes a circle out of walls. Returns penetration depth in world units
 // (0 = no contact) and the outward normal in Q14.
 s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz);
+s32 world_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz);
 
 // Loop centreline at angle theta (1024 units), in Q8 world units.
 void loop_point(s32 theta, s32 *x, s32 *y, s32 *z);

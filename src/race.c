@@ -7,6 +7,7 @@
 #include "hud.h"
 #include "menu.h"
 #include "sound.h"
+#include "softbody.h"
 
 Race g_race;
 
@@ -196,6 +197,28 @@ static void rivals_step(Car *player, s32 started, s32 plat)
         // Contact with the player.
         s32 dx = px - r->x, dz = pz - r->z;
         if (iabs(dx) > 70 || iabs(dz) > 70 || iabs((player->y - r->y) >> 8) > 40) continue;
+        if (sb_valid(player)) {
+            // Soft-body: the rival is three solid balls nose to tail that
+            // push on the player's frame (and dent it where they hit).
+            s32 fx = isin(r->heading >> 6), fz = icos(r->heading >> 6);
+            s32 rvx = (r->v * fx) >> 14, rvz = (r->v * fz) >> 14;
+            s32 hit = 0, shx = 0, shz = 0;
+            for (s32 k = -1; k <= 1; k++) {
+                s32 h = sb_push(r->x + ((fx * 28 * k) >> 14), (r->y >> 8) + 12, r->z + ((fz * 28 * k) >> 14),
+                                22, rvx, rvz, &shx, &shz);
+                if (h > hit) hit = h;
+            }
+            if (!hit) continue;
+            if (hit > player->hit) player->hit = hit;
+            if (hit > 120) sound_play(SFX_SCRAPE);
+            s32 shove = 6;
+            r->lat += r->lat > plat ? shove : -shove;
+            if (r->lat > 70) r->lat = 70; else if (r->lat < -70) r->lat = -70;
+            r->lat_target = r->lat;
+            if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
+            else r->v += 40;
+            continue;
+        }
         s32 dist = isqrt(dx * dx + dz * dz);
         if (dist >= 54 || player->mode == CAR_CRASH) continue;
         if (!dist) { dx = 1; dist = 1; }

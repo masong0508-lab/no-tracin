@@ -94,6 +94,45 @@ void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz)
     *gz = (g * p->uz) >> 14;
 }
 
+s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
+{
+    TrackHit h;
+    *h0 = 0; *gx = 0; *gz = 0;
+    if (!track_find(x, z, &h)) return 0;
+    const TrackPt *p = &g_track->pts[h.seg], *q = &g_track->pts[h.seg + 1 == g_track->count ? 0 : h.seg + 1];
+    if (h.dist + r > barrier(p)) return 0;
+    s32 g = ((q->y - p->y) << 8) / (p->len ? p->len : 1);
+    *h0 = h.h;
+    *gx = (g * p->ux) >> 14;
+    *gz = (g * p->uz) >> 14;
+    return 1;
+}
+
+// Road height near stretch seg (the car's own, say): only that stretch and
+// its neighbours are tried, which is much cheaper than a full search.
+s32 track_height_near(s32 seg, s32 x, s32 z)
+{
+    const TrackDef *t = g_track;
+    s32 best = 0x7FFFFFFF, bi = seg, ba = 0;
+    for (s32 k = -1; k <= 1; k++) {
+        s32 i = seg + k;
+        if (i < 0) i += t->count;
+        if (i >= t->count) i -= t->count;
+        const TrackPt *p = &t->pts[i];
+        s32 vx = x - p->x, vz = z - p->z;
+        s32 a = (vx * p->ux + vz * p->uz) >> 14;
+        if (a < 0) a = 0;
+        if (a > p->len) a = p->len;
+        s32 cx = vx - ((p->ux * a) >> 14), cz = vz - ((p->uz * a) >> 14);
+        s32 d = cx * cx + cz * cz;
+        if (d < best) { best = d; bi = i; ba = a; }
+    }
+    const TrackPt *p = &t->pts[bi], *q = &t->pts[bi + 1 == t->count ? 0 : bi + 1];
+    s32 edge = barrier(p);
+    if (best > edge * edge) return track_height(x, z);
+    return (p->y << 8) + (((q->y - p->y) * ba * inv_len[bi]) >> 8);
+}
+
 s32 track_surface(s32 x, s32 z)
 {
     TrackHit h;

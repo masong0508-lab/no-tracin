@@ -707,16 +707,8 @@ IWRAM_CODE void r_box_mat(s32 px, s32 py, s32 pz, const s32 *m,
     queue_box(cv, material, 31);
 }
 
-IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
+IWRAM_CODE static void queue_mesh(const Vec3 *cv, const Mesh *mesh)
 {
-    Vec3 cv[MESH_MAX_VERTS];
-    const s8 *v = mesh->verts;
-    for (s32 i = 0; i < mesh->vert_count; i++, v += 3) {
-        s32 lx = v[0], ly = v[1], lz = v[2];
-        to_camera(px + ((m[0] * lx + m[3] * ly + m[6] * lz) >> 14),
-                  py + ((m[1] * lx + m[4] * ly + m[7] * lz) >> 14),
-                  pz + ((m[2] * lx + m[5] * ly + m[8] * lz) >> 14), &cv[i]);
-    }
     const u8 *f = mesh->faces;
     s32 parent = -1;
     for (s32 i = 0; i < mesh->face_count; i++) {
@@ -729,6 +721,26 @@ IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
             queue_cam_face(q, n, f[1], 0, parent - 1);
         f += 2 + n;
     }
+}
+
+IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
+{
+    Vec3 cv[MESH_MAX_VERTS];
+    const s8 *v = mesh->verts;
+    for (s32 i = 0; i < mesh->vert_count; i++, v += 3) {
+        s32 lx = v[0], ly = v[1], lz = v[2];
+        to_camera(px + ((m[0] * lx + m[3] * ly + m[6] * lz) >> 14),
+                  py + ((m[1] * lx + m[4] * ly + m[7] * lz) >> 14),
+                  pz + ((m[2] * lx + m[5] * ly + m[8] * lz) >> 14), &cv[i]);
+    }
+    queue_mesh(cv, mesh);
+}
+
+IWRAM_CODE void r_mesh_world(const Vec3 *v, const Mesh *mesh)
+{
+    Vec3 cv[MESH_MAX_VERTS];
+    for (s32 i = 0; i < mesh->vert_count; i++) to_camera(v[i].x, v[i].y, v[i].z, &cv[i]);
+    queue_mesh(cv, mesh);
 }
 
 IWRAM_CODE void r_flush(void)

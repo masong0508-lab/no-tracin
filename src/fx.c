@@ -30,7 +30,7 @@ typedef struct {
     u8 type, age;
 } Particle;
 
-static Particle parts[MAX_PARTICLES];
+EWRAM_BSS static Particle parts[MAX_PARTICLES];
 static s32 next_part;
 
 #define MAX_SKIDS 48

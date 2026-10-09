@@ -246,6 +246,28 @@ s32 world_height(s32 x, s32 z)
     return h;
 }
 
+// The ground around (x, z), out to r, as one plane: h0 + gx * dx + gz * dz
+// (Q8, with gx and gz in Q8 rise per unit). Returns 0 where it isn't one
+// (a ramp, a bank or water nearby), and the caller asks point by point.
+s32 world_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
+{
+    if (g_track) return track_ground_plane(x, z, r, h0, gx, gz);
+    *h0 = 0; *gx = 0; *gz = 0;
+    if (x - r < 0 || z - r < 0 || x + r >= WORLD || z + r >= WORLD) return 0;
+    s32 bx0 = (x - r) / BLOCK, bx1 = (x + r) / BLOCK, bz0 = (z - r) / BLOCK, bz1 = (z + r) / BLOCK;
+    for (s32 bz = bz0; bz <= bz1; bz++)
+        for (s32 bx = bx0; bx <= bx1; bx++) {
+            const u8 *list = &feat_refs[cell_first[bz][bx]];
+            for (s32 k = 0, n = cell_count[bz][bx]; k < n; k++) {
+                const Feature *f = &features[list[k]];
+                s32 x0 = f->x0, z0 = f->z0, x1 = f->x1, z1 = f->z1;
+                if (f->type == F_BANK) { x0 = f->x0 - f->z1; x1 = f->x0 + f->z1; z1 = f->z0 + f->z1; }
+                if (x + r > x0 && x - r < x1 && z + r > z0 && z - r < z1) return 0;
+            }
+        }
+    return 1;
+}
+
 s32 world_in_water(s32 x, s32 z)
 {
     if (g_track) return 0;

@@ -7,6 +7,7 @@
 #include "car.h"
 #include "world.h"
 #include "track.h"
+#include "softbody.h"
 
 #define G           car_g     // gravity, Q8 units per step^2 (35 = 2.5 g)
 #define GRIP        car_grip  // max sideways velocity change per step (38 = ~1.1 g)
@@ -81,6 +82,7 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
     c->safe_x = x;
     c->safe_z = z;
     c->safe_heading = heading;
+    sb_invalidate();
 }
 
 void car_respawn(Car *c)
@@ -162,6 +164,14 @@ static void enter_loop(Car *c, s32 vlong)
     c->loop_v = vlong;
     c->heading = 0;
     c->steer = 0;
+}
+
+// Crossing the loop's entry line, lined up and moving forward.
+static s32 at_loop(const Car *c, s32 z0, s32 nx, s32 nz, s32 vlong)
+{
+    const Loop *l = &the_loop;
+    return !g_track && (z0 >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
+           iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256;
 }
 
 static void ground_step(Car *c, u16 keys)
@@ -282,9 +292,7 @@ static void ground_step(Car *c, u16 keys)
     }
 
     // The loop: crossing its entry line lined up and moving forward.
-    const Loop *l = &the_loop;
-    if (!g_track && (c->z >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
-        iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256) {
+    if (at_loop(c, c->z, nx, nz, vlong)) {
         c->x = nx; c->z = nz;
         enter_loop(c, vlong);
         return;
@@ -586,6 +594,21 @@ void car_step(Car *c, u16 keys)
 {
     c->hit = 0;
     c->landed = 0;
+    // Soft-body physics drives the car on the ground and in the air; the loop
+    // ride, sinking wrecks and the fly cheat stay on the arcade model.
+    if (car_softbody && !cheat_fly && (c->mode == CAR_GROUND || c->mode == CAR_AIR)) {
+        s32 z0 = c->z;
+        sb_step(c, keys);
+        s32 h = c->heading >> 6;
+        s32 vlong = (c->vx * isin(h) + c->vz * icos(h)) >> 14;
+        if (c->mode == CAR_GROUND && at_loop(c, z0, c->x, c->z, vlong)) {
+            enter_loop(c, vlong);
+            sb_park();
+        }
+        gearbox(c, keys);
+        return;
+    }
+    sb_park();
     switch (c->mode) {
     case CAR_GROUND: ground_step(c, keys); break;
     case CAR_AIR:    air_step(c, keys);    break;
@@ -676,7 +699,7 @@ static const u8 car_faces[] = {
 static const Mesh car_mesh = { car_verts, car_faces, sizeof(car_verts) / 3, CAR_FACES };
 
 // The ghost car: the same shape in pale blue.
-static u8 ghost_faces[sizeof(car_faces)];
+EWRAM_BSS static u8 ghost_faces[sizeof(car_faces)];
 static const Mesh ghost_mesh = { car_verts, ghost_faces, sizeof(car_verts) / 3, CAR_FACES };
 
 static void make_ghost(void)
@@ -726,7 +749,7 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
 
 // CPU rivals: the same car in another colour, with a cheaper version far off.
 #define RIVAL_COLORS 7
-static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
+EWRAM_BSS static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
 static const u8 rival_mats[RIVAL_COLORS] = { M_STUNT_WHITE, M_BLD2, M_LINE, M_BLD5, M_BLD4, M_GLASS, M_BLD0 };
 
 void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth)
@@ -773,6 +796,10 @@ void car_draw(const Car *c, s32 ghost)
     if (ghost) {
         if (!ghost_faces[0]) make_ghost();
         r_mesh(x, y, z, m, &ghost_mesh);
+        return;
+    }
+    if (sb_valid(c)) {
+        sb_draw(c, &car_mesh);
         return;
     }
     wheel(x, y, z, m, -17, -30);

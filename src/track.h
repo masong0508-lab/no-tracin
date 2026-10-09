@@ -57,6 +57,8 @@ void track_load(s32 index);            // -1 goes back to the city
 s32  track_height(s32 x, s32 z);       // Q8
 s32  track_surface(s32 x, s32 z);
 void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz);   // road slope, Q8 rise per unit
+s32  track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz);   // see world_ground_plane
+s32  track_height_near(s32 seg, s32 x, s32 z);    // track_height, searching only near seg
 s32  track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz);
 void track_draw(s32 focus_x, s32 focus_z, s32 frame);
 // A point `d` units along the lap (wrapping) and `lat` to the right of the

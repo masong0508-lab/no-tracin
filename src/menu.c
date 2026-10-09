@@ -2,6 +2,7 @@
 // bitmap over a frozen copy of the last frame, so they can hold any
 // amount of text (sprites run out at 128).
 #include "menu.h"
+#include "softbody.h"
 #include "game.h"
 #include "sound.h"
 #include "hud.h"
@@ -28,6 +29,12 @@ static const OptDef defs[OPT_COUNT] = {
     [OPT_HUD]      = { "HUD",          2, { "FULL", "CLEAN" } },
     [OPT_SOUND]    = { "SOUND",        3, { "ON", "NO ENGINE", "OFF" } },
     [OPT_AUTOSAVE] = { "AUTOSAVE",     2, { "ON", "OFF" } },
+    [OPT_PHYSICS]  = { "PHYSICS",      2, { "SOFT-BODY", "ARCADE" } },
+};
+// The order the options menu lists them in.
+static const u8 opt_order[OPT_COUNT] = {
+    OPT_PHYSICS, OPT_GRAVITY, OPT_ENGINE, OPT_TYRES, OPT_CRASHES, OPT_SPEED, OPT_SLOWMO,
+    OPT_TIME, OPT_PAINT, OPT_SHAKE, OPT_UNITS, OPT_GHOST, OPT_HUD, OPT_SOUND, OPT_AUTOSAVE,
 };
 
 static const u16 paints[7] = {
@@ -59,6 +66,7 @@ void options_apply(void)
     car_power = power[g_opt[OPT_ENGINE]];
     car_grip = grip[g_opt[OPT_TYRES]];
     car_crashes = g_opt[OPT_CRASHES] == 0;
+    car_softbody = g_opt[OPT_PHYSICS] == 0;
     g_units_kmh = g_opt[OPT_UNITS];
     r_init_palette(g_opt[OPT_TIME], paint_color(0));
     sound_mode(g_opt[OPT_SOUND]);
@@ -227,8 +235,8 @@ void menu_options(void)
         if (k & KEY_UP)   sel = (sel + n - 1) % n;
         if (k & KEY_DOWN) sel = (sel + 1) % n;
         if (sel < OPT_COUNT && (k & (KEY_LEFT | KEY_RIGHT | KEY_A))) {
-            s32 c = defs[sel].count;
-            g_opt[sel] = (g_opt[sel] + ((k & KEY_LEFT) ? c - 1 : 1)) % c;
+            s32 o = opt_order[sel], c = defs[o].count;
+            g_opt[o] = (g_opt[o] + ((k & KEY_LEFT) ? c - 1 : 1)) % c;
             options_apply();
             sound_play(SFX_BEEP);
         }
@@ -242,11 +250,12 @@ void menu_options(void)
 
         frame_begin("OPTIONS", n - 2);
         s32 y = menu_top(n - 2) - 4;
-        for (s32 i = 0; i < n; i++, y += 9) {
-            if (i == sel) rect(20, y - 1, 220, y + 8, C_HILITE);
+        for (s32 i = 0; i < n; i++, y += 8) {
+            if (i == sel) rect(20, y - 1, 220, y + 7, C_HILITE);
             if (i == OPT_COUNT) { text_c(y, "DONE", i == sel ? C_YELLOW : C_WHITE, 1); break; }
-            text(26, y, defs[i].name, i == sel ? C_YELLOW : C_WHITE, 1);
-            const char *v = defs[i].values[g_opt[i]];
+            s32 o = opt_order[i];
+            text(26, y, defs[o].name, i == sel ? C_YELLOW : C_WHITE, 1);
+            const char *v = defs[o].values[g_opt[o]];
             if (i == sel) {
                 text(118, y, "<", C_CYAN, 1);
                 text_r(216, y, ">", C_CYAN);
