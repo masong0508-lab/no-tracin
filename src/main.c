@@ -427,7 +427,7 @@ static void draw_hud(const Car *car, const Camera *cam, s32 view, s32 label_time
     if (g->combo > 1 && g->combo_timer > 0) {
         p = put(buf, "COMBO X");
         put_num(p, g->combo);
-        hud_text_right(236, 21, buf, 0, (g->combo_timer & 8) || g->combo_timer > 60 ? PAL_YELLOW : PAL_RED);
+        hud_text_right(236, 21, buf, 0, (g->combo_timer & 32) || g->combo_timer > 60 ? PAL_YELLOW : PAL_RED);
     }
     if (g->lap_active) {
         p = put(buf, "LAP ");

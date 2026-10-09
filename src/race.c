@@ -399,7 +399,7 @@ void race_hud(const Car *car, s32 frame)
         hud_text_centered(3, "TIME", 0, PAL_YELLOW);
         s32 secs = (g->time_left + 59) / 60;
         put_num(buf, secs);
-        s32 pal = g->extend_flash && (frame & 4) ? PAL_GREEN : secs <= 10 && (frame & 8) ? PAL_RED : PAL_WHITE;
+        s32 pal = g->extend_flash ? PAL_GREEN : secs <= 10 && (frame & 32) ? PAL_RED : PAL_WHITE;
         hud_text_huge(16, buf, pal);
         hud_text(6, 3, "POS", 0, PAL_CYAN);
         p = put_num(buf, g->position);
