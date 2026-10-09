@@ -1,6 +1,6 @@
 // No Tracin': Race Drivin' x Payback x Virtua Racing for the GBA.
 // A gas, B brake/reverse, L handbrake, d-pad steer, R nitro, SELECT change
-// camera, START pause menu (options, saving, reset the car).
+// camera, START pause menu (options, saving, reset the car, the map editor).
 #include "gba.h"
 #include "world.h"
 #include "car.h"
@@ -13,6 +13,7 @@
 #include "race.h"
 #include "props.h"
 #include "softbody.h"
+#include "edit.h"
 
 #define STEP_CYCLES 280896   // one 60 Hz physics step in CPU cycles
 #define OBJ_ON      0x1000
@@ -275,17 +276,18 @@ static void title_screen(s32 *t)
     }
 }
 
-enum { MODE_ARCADE, MODE_FREE, MODE_CITY, MODE_LOAD, MODE_OPTIONS, MODE_RECORDS, MODE_COUNT };
+enum { MODE_ARCADE, MODE_FREE, MODE_CITY, MODE_EDITOR, MODE_LOAD, MODE_OPTIONS, MODE_RECORDS, MODE_COUNT };
 
 // Returns a MODE_*, or -1 to go back to the title.
 static s32 mode_select(s32 *t, s32 *sel)
 {
     static const char *const names[MODE_COUNT] = {
-        "ARCADE", "FREE RUN", "STUNT CITY", "LOAD GAME", "OPTIONS", "RECORDS",
+        "ARCADE", "FREE RUN", "STUNT CITY", "MAP EDITOR", "LOAD GAME", "OPTIONS", "RECORDS",
     };
     static const char *const about[MODE_COUNT][2] = {
         { "RACE 7 CARS", "BEAT THE CLOCK" }, { "PRACTICE LAPS", "NO TIME LIMIT" },
-        { "OPEN WORLD", "CRASH AND SMASH" }, { "STUNT CITY", "SAVE SLOTS" },
+        { "OPEN WORLD", "CRASH AND SMASH" }, { "BUILD STUNTS", "IN STUNT CITY" },
+        { "STUNT CITY", "SAVE SLOTS" },
         { "GAME SETUP", "" }, { "STUNT RECORDS", "" },
     };
     u16 prev = ~REG_KEYINPUT;
@@ -301,7 +303,7 @@ static s32 mode_select(s32 *t, s32 *sel)
         hud_begin();
         header(page, "MODE SELECT");
         for (s32 i = 0; i < MODE_COUNT; i++) {
-            s32 y = 36 + i * 18, on = i == *sel;
+            s32 y = 34 + i * 16, on = i == *sel;
             box(page, 10, y, 122, y + 15, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
             hud_text(20, y + 4, names[i], 0, on ? PAL_YELLOW : PAL_WHITE);
         }
@@ -480,17 +482,19 @@ static void draw_hud(const Car *car, const Camera *cam, s32 view, s32 label_time
 // Pause menu; returns 1 to quit to the title.
 static s32 pause_menu(Car *car, CamState *cs)
 {
-    static const char *const items[8] = {
-        "RESUME", "RESET CAR", "OPTIONS", "SAVE GAME", "LOAD GAME", "RECORDS", "CHEATS", "QUIT TO TITLE",
+    const char *const items[9] = {
+        "RESUME", "RESET CAR", g_edit_testing ? "BACK TO EDITOR" : "MAP EDITOR", "OPTIONS",
+        "SAVE GAME", "LOAD GAME", "RECORDS", "CHEATS", "QUIT TO TITLE",
     };
     sound_silence();
     menu_freeze();
     for (;;) {
-        s32 i = menu_list("PAUSED", items, 8);
+        s32 i = menu_list("PAUSED", items, 9);
         if (i <= 0) return 0;
-        if (i == 1) { car_respawn(car); props_reset(); cs->ready = 0; return 0; }
-        if (i == 2) menu_options();
-        if (i == 3) {
+        if (i == 1) { car_respawn(car); edit_reset_props(); cs->ready = 0; return 0; }
+        if (i == 2) { edit_run(car); cs->ready = 0; return 0; }
+        if (i == 3) menu_options();
+        if (i == 4) {
             s32 slot = menu_slot("SAVE GAME", 1);
             if (slot >= 0) {
                 save_slot(slot, car, g_game.score);
@@ -498,7 +502,7 @@ static s32 pause_menu(Car *car, CamState *cs)
                 return 0;
             }
         }
-        if (i == 4) {
+        if (i == 5) {
             s32 slot = menu_slot("LOAD GAME", 0), score;
             if (slot >= 0 && load_slot(slot, car, &score)) {
                 game_reset();
@@ -509,9 +513,9 @@ static s32 pause_menu(Car *car, CamState *cs)
                 return 0;
             }
         }
-        if (i == 5) menu_records();
-        if (i == 6) menu_cheats();
-        if (i == 7) {
+        if (i == 6) menu_records();
+        if (i == 7) menu_cheats();
+        if (i == 8) {
             if (!g_opt[OPT_AUTOSAVE]) save_system();
             return 1;
         }
@@ -537,8 +541,8 @@ static s32 race_pause(void)
 }
 
 // Drives Freedom City (track < 0) or a race on a circuit. Returns 1 when
-// the race should start again.
-static s32 play(s32 load_from, s32 track, s32 race_mode)
+// the race should start again. With `editor` the city opens in the map editor.
+static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
 {
     Car *car = &g_car;
     track_load(track);
@@ -549,7 +553,8 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
     fx_reset();
     if (track >= 0) race_begin(track, race_mode, car);
     else car_reset(car, the_loop.x, START_Z - 81, 0);     // the whole car behind the start line
-    props_reset();
+    if (track < 0) edit_enter_city();                     // the saved map
+    edit_reset_props();
     s32 countdown = 180;
     if (track < 0 && load_from >= 0) {
         s32 score;
@@ -559,6 +564,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
             game_message("GAME LOADED", "", PAL_GREEN, 90);
         }
     }
+    if (editor && edit_run(car)) countdown = 0;
     Camera cam;
     CamState cs = { 0 };
     s32 view = VIEW_CHASE, label_timer = 0, frame = 0;
@@ -590,7 +596,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
         // Fixed 60 Hz physics, however long the last frame took to draw.
         // Game speed and air slow-mo stretch or shrink the step.
         if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
-        car->boost = (keys & KEY_R) && g_game.nitro > 0 && countdown <= 0 && car->mode != CAR_CRASH;
+        car->boost = (((keys & KEY_R) && g_game.nitro > 0) || edit_boosting()) && countdown <= 0 && car->mode != CAR_CRASH;
         u32 now = cycles();
         acc += now - last;
         last = now;
@@ -619,6 +625,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
             sound_step(car);
             game_step(car);
             if (g_track) race_step(car, countdown <= 0);
+            else edit_step(car);
             camera_step(&cs, car, view);
             acc -= len;
             steps++;
@@ -653,7 +660,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
         hud_begin();
         if (g_track) race_hud(car, frame);
         draw_hud(car, &cam, view, label_timer, countdown);
-        if (!g_track) game_draw_stars(frame);
+        if (!g_track) { game_draw_stars(frame); edit_draw_sprites(frame); }
         fx_draw_sprites();
 
         // Pull the draw distance in when a frame comes close to two vblanks,
@@ -692,17 +699,17 @@ int main(void)
             if (m < 0) break;
             if (m == MODE_OPTIONS) { menu_freeze(); menu_options(); continue; }
             if (m == MODE_RECORDS) { menu_freeze(); menu_records(); continue; }
-            if (m == MODE_CITY) { play(-1, -1, 0); show_track(course); continue; }
+            if (m == MODE_CITY || m == MODE_EDITOR) { play(-1, -1, 0, m == MODE_EDITOR); show_track(course); continue; }
             if (m == MODE_LOAD) {
                 menu_freeze();
                 s32 slot = menu_slot("LOAD GAME", 0);
-                if (slot >= 0) { sound_play(SFX_START); play(slot, -1, 0); show_track(course); }
+                if (slot >= 0) { sound_play(SFX_START); play(slot, -1, 0, 0); show_track(course); }
                 continue;
             }
             for (;;) {
                 s32 c = course_select(&t, &course, m);
                 if (c < 0) break;
-                while (play(-1, c, m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE)) {}
+                while (play(-1, c, m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE, 0)) {}
                 show_track(course);
                 t = 0;
             }
