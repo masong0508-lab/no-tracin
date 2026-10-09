@@ -32,6 +32,7 @@ static s16 blk_x[MAX_POINTS / BLOCK_PTS], blk_z[MAX_POINTS / BLOCK_PTS], blk_r[M
 enum {
     P_TREE, P_PINE, P_BUILDING, P_STAND, P_FERRIS, P_TENT, P_TOWER, P_ROCK,
     P_COLUMN, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_HOUSE, P_SIGN, P_BOAT,
+    P_CLIFF, P_COASTER,
 };
 
 // ---------------------------------------------------------------- queries
@@ -347,6 +348,46 @@ static void draw_temple(s32 x, s32 y, s32 z, s32 depth)
     roof(x - w - 6, z - d - 6, x + w + 6, z + d + 6, y + 30 + ch, 34, 1, M_BLD3);
 }
 
+// A slab of rock lined up with the road (rot = heading, 256 per turn): the
+// walls of the Acropolis valley.
+static void draw_cliff(s32 x, s32 y, s32 z, s32 rot, s32 v, s32 depth)
+{
+    s32 h = rot << 2, len = 78, back = 70, top = y + 150 + (v & 127);
+    s32 ax = (isin(h) * len) >> 14, az = (icos(h) * len) >> 14;
+    s32 bx = (icos(h) * back) >> 14, bz = (-isin(h) * back) >> 14;
+    s32 mat = (v & 64) ? M_BLD5 : M_BLD3;
+    // Faces toward and away from the road, leaning back a little, then the top.
+    face4(x - ax - bx, y - 20, z - az - bz, x + ax - bx, y - 20, z + az - bz,
+          x + ax - bx / 2, top, z + az - bz / 2, x - ax - bx / 2, top, z - az - bz / 2, COLOR(mat, 1), RF_TWO_SIDED);
+    if (depth > 420) return;     // further off the road-facing side is all that shows
+    face4(x - ax + bx, y - 20, z - az + bz, x + ax + bx, y - 20, z + az + bz,
+          x + ax + bx / 2, top, z + az + bz / 2, x - ax + bx / 2, top, z - az + bz / 2, COLOR(mat, 2), RF_TWO_SIDED);
+    face4(x - ax - bx / 2, top, z - az - bz / 2, x + ax - bx / 2, top, z + az - bz / 2,
+          x + ax + bx / 2, top, z + az + bz / 2, x - ax + bx / 2, top, z - az + bz / 2, COLOR(mat, 3), RF_TWO_SIDED);
+}
+
+// Roller coaster in the amusement park, running north-south: trestles, a
+// humped track and a train running along it.
+static void draw_coaster(s32 x, s32 y, s32 z, s32 depth, s32 frame)
+{
+    static const s16 hp[9] = { 50, 130, 230, 270, 210, 120, 80, 160, 60 };
+    const s32 gap = 90, z0 = z - 4 * gap;
+    for (s32 i = 0; i < 9; i++) {
+        s32 pz = z0 + i * gap;
+        if (depth < 900 || !(i & 1)) r_box(x - 5, y, pz - 5, x + 5, y + hp[i], pz + 5, M_STUNT_WHITE);
+        if (i < 8)
+            face4(x - 14, y + hp[i], pz, x - 14, y + hp[i + 1], pz + gap, x + 14, y + hp[i + 1], pz + gap,
+                  x + 14, y + hp[i], pz, COLOR(M_STUNT_RED, (i & 1) + 1), RF_TWO_SIDED);
+    }
+    // The train goes back and forth along the track.
+    s32 t = (frame * 3) % (16 * gap);
+    if (t > 8 * gap) t = 16 * gap - t;
+    s32 i = t / gap, f = t % gap;
+    if (i > 7) { i = 7; f = gap; }
+    s32 ty = y + hp[i] + ((hp[i + 1] - hp[i]) * f) / gap, tz = z0 + t;
+    r_box(x - 12, ty, tz - 22, x + 12, ty + 18, tz + 22, M_BLD4);
+}
+
 static void draw_prop(const Prop *p, s32 y, s32 depth, s32 frame)
 {
     s32 x = p->x, z = p->z, v = p->var;
@@ -400,6 +441,8 @@ static void draw_prop(const Prop *p, s32 y, s32 depth, s32 frame)
         }
         break;
     case P_TEMPLE: draw_temple(x, y + 10, z, depth); break;
+    case P_CLIFF: draw_cliff(x, y, z, p->rot, v, depth); break;
+    case P_COASTER: draw_coaster(x, y, z, depth, frame); break;
     case P_CRANE:
         r_box(x - 14, y, z - 14, x + 14, y + 260, z + 14, M_BLD4);
         r_box(x - 16, y + 260, z - 220, x + 16, y + 280, z + 80, M_BLD4);
@@ -614,6 +657,31 @@ static void draw_segment_faces(s32 a, s32 depth)
         }
         return;
     }
+    if (pa->flags & TF_TUNNEL) {
+        // Walls and a roof close in over the road; a portal at each end.
+        s32 ea = barrier(pa), eb = barrier(&pts[b]), H = 120;
+        s32 prev = a ? a - 1 : t->count - 1;
+        if (depth < 1150) {
+            for (s32 s = -1; s <= 1; s += 2)
+                face4(EX(a, s * ea), ya + H, EZ(a, s * ea), EX(b, s * eb), yb + H, EZ(b, s * eb),
+                      EX(b, s * eb), yb, EZ(b, s * eb), EX(a, s * ea), ya, EZ(a, s * ea),
+                      COLOR(M_SHADOW, 0), RF_TWO_SIDED);
+            face4(EX(a, -ea), ya + H, EZ(a, -ea), EX(a, ea), ya + H, EZ(a, ea),
+                  EX(b, eb), yb + H, EZ(b, eb), EX(b, -eb), yb + H, EZ(b, -eb), COLOR(M_SHADOW, 0), RF_TWO_SIDED);
+        }
+        for (s32 end = 0; end < 2; end++) {
+            s32 i = end ? b : a;
+            if (end ? (pts[b].flags & TF_TUNNEL) : (pts[prev].flags & TF_TUNNEL)) continue;
+            s32 e = barrier(&pts[i]), y = pts[i].y, top = y + H + 90, wide = e + 220;
+            face4(EX(i, -wide), top, EZ(i, -wide), EX(i, -e), top, EZ(i, -e),
+                  EX(i, -e), y - 10, EZ(i, -e), EX(i, -wide), y - 10, EZ(i, -wide), COLOR(M_SIDEWALK, 1), RF_TWO_SIDED);
+            face4(EX(i, e), top, EZ(i, e), EX(i, wide), top, EZ(i, wide),
+                  EX(i, wide), y - 10, EZ(i, wide), EX(i, e), y - 10, EZ(i, e), COLOR(M_SIDEWALK, 1), RF_TWO_SIDED);
+            face4(EX(i, -e), top, EZ(i, -e), EX(i, e), top, EZ(i, e),
+                  EX(i, e), y + H, EZ(i, e), EX(i, -e), y + H, EZ(i, -e), COLOR(M_SIDEWALK, 2), RF_TWO_SIDED);
+        }
+        return;
+    }
     if (depth > 1150) return;
     // Barrier walls on both sides: tyre-wall red and white near corners,
     // otherwise the course's guard rail colour.
@@ -689,6 +757,8 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
     if (cz0 < 0) cz0 = 0;
     if (cx1 > 15) cx1 = 15;
     if (cz1 > 15) cz1 = 15;
+    // Landmarks first so trees and rocks can't use up the face budget on them.
+    for (s32 pass = 0; pass < 2; pass++)
     for (s32 cz = cz0; cz <= cz1; cz++)
         for (s32 cx = cx0; cx <= cx1; cx++) {
             s32 c = cz * 16 + cx;
@@ -696,8 +766,10 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
             for (s32 i = first; i < end; i++) {
                 const Prop *p = &t->props[i];
                 s32 big = p->type == P_FERRIS || p->type == P_TEMPLE || p->type == P_STAND ||
-                          p->type == P_BALLOON || p->type == P_LIGHTHOUSE || p->type == P_TOWER;
-                if (!r_visible(p->x, p->z, big ? 260 : 120)) continue;
+                          p->type == P_BALLOON || p->type == P_LIGHTHOUSE || p->type == P_TOWER ||
+                          p->type == P_COASTER;
+                if (big != !pass) continue;
+                if (!r_visible(p->x, p->z, big ? 300 : 120)) continue;
                 s32 side, d = r_depth(p->x, p->z, &side);
                 if (!big && d > 760) continue;
                 draw_prop(p, p->y2 * 2, d, frame);

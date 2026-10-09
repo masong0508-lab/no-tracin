@@ -28,14 +28,15 @@ VERGE = 96         # grass between the road edge and the barrier
 
 # Control-point attributes (apply from this point to the next).
 BRIDGE = 1         # no verge, railings at the road edge, side girders
-TUNNEL = 2         # (unused)
+TUNNEL = 2         # walls and a roof close in over the road
 
 # Scenery types (must match track.c).
 P_TREE, P_PINE, P_BUILDING, P_STAND, P_FERRIS, P_TENT, P_TOWER, P_ROCK, \
-    P_COLUMN, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_HOUSE, P_SIGN, P_BOAT = range(16)
+    P_COLUMN, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_HOUSE, P_SIGN, P_BOAT, \
+    P_CLIFF, P_COASTER = range(18)
 
 # Track point flags (must match track.c).
-F_KERB_L, F_KERB_R, F_BRIDGE, F_START = 1, 2, 4, 8
+F_KERB_L, F_KERB_R, F_BRIDGE, F_START, F_TUNNEL = 1, 2, 4, 8, 16
 
 
 # ---------------------------------------------------------------- the courses
@@ -49,14 +50,14 @@ BIG_FOREST = dict(
         (2000, 1700, 0, 0),
         (2000, 2600, 0, 0),
         (2000, 3500, 10, 0),
-        (2100, 4200, 30, 0),       # long right sweeper
-        (2500, 4750, 50, 0),
-        (3200, 4980, 70, 0),
-        (3900, 4980, 80, 0),
-        (4350, 4800, 80, 0),       # chicane
-        (4750, 5000, 80, 0),
-        (5250, 4900, 70, 0),
-        (5800, 4500, 50, 0),       # downhill toward the park
+        (2100, 4200, 50, 0),       # long right sweeper, climbing into the hills
+        (2500, 4750, 90, 0),
+        (3200, 4980, 130, 0),
+        (3900, 4980, 150, 0),      # crest
+        (4350, 4800, 140, 0),      # chicane
+        (4750, 5000, 120, 0),
+        (5250, 4900, 90, 0),
+        (5800, 4500, 55, 0),       # downhill toward the park
         (6050, 3800, 30, 0),
         (6060, 3000, 20, 0),
         (6000, 2300, 20, 0),
@@ -78,6 +79,8 @@ BIG_FOREST = dict(
     water=[(3620, 2200, 3820, 4400)],
     landmarks=[
         (P_FERRIS, 5560, 1450, 0),
+        (P_COASTER, 6520, 2950, 0),
+        (P_COASTER, 4550, 1500, 0),
         (P_TENT, 6400, 2000, 0),
         (P_TENT, 6450, 2500, 1),
         (P_BALLOON, 4300, 4300, 0),
@@ -109,8 +112,8 @@ BAY_BRIDGE = dict(
         (4700, 5050, 110, 0),
         (4700, 5500, 50, 0),
         (4600, 5950, 10, 0),       # left at the far end
-        (4250, 6250, 0, 0),
-        (3700, 6300, 0, 0),
+        (4250, 6250, 0, TUNNEL),   # tunnel under the headland
+        (3700, 6300, 0, TUNNEL),
         (3200, 6250, 0, 0),        # city chicane
         (2850, 6050, 0, 0),
         (2500, 6250, 0, 0),
@@ -149,18 +152,18 @@ ACROPOLIS = dict(
     points=[
         (1800, 1800, 0, 0),
         (1800, 2600, 10, 0),
-        (1800, 3300, 30, 0),
-        (1650, 3900, 60, 0),       # fast left kink, climbing
-        (1900, 4500, 90, 0),       # esses
-        (1700, 5100, 120, 0),
-        (1950, 5650, 150, 0),
-        (2400, 6000, 180, 0),
-        (2900, 6250, 200, 0),      # temple hairpin (right, 180)
-        (3250, 6150, 200, 0),
-        (3300, 5800, 190, 0),
-        (2950, 5450, 170, 0),
-        (2850, 5000, 150, 0),
-        (3200, 4500, 120, 0),      # long downhill
+        (1800, 3300, 40, 0),
+        (1650, 3900, 80, 0),       # fast left kink, climbing the valley
+        (1900, 4500, 120, 0),      # esses
+        (1700, 5100, 160, 0),
+        (1950, 5650, 200, 0),
+        (2400, 6000, 230, 0),
+        (2900, 6250, 250, 0),      # temple hairpin (right, 180)
+        (3250, 6150, 250, 0),
+        (3300, 5800, 235, 0),
+        (2950, 5450, 210, 0),
+        (2850, 5000, 180, 0),
+        (3200, 4500, 140, 0),      # long downhill
         (3900, 4300, 90, 0),
         (4600, 4450, 70, 0),       # double-apex right
         (5300, 4300, 60, 0),
@@ -187,6 +190,8 @@ ACROPOLIS = dict(
         (P_TOWER, 4300, 5000, 0),
     ],
     zones=[
+        (2, 8, P_CLIFF, 120),      # the valley walls
+        (16, 20, P_CLIFF, 140),
         (2, 14, P_ROCK, 130),
         (13, 23, P_COLUMN, 260),
         (0, 30, P_PINE, 210),
@@ -267,10 +272,12 @@ def build(course, seed):
             f |= F_KERB_L | F_KERB_R
         if r["attr"] & BRIDGE:
             f |= F_BRIDGE
+        if r["attr"] & TUNNEL:
+            f |= F_TUNNEL
         if i == 0:
             f |= F_START
         r["flags"] = f
-        r["verge"] = 0 if f & F_BRIDGE else VERGE
+        r["verge"] = 0 if f & F_BRIDGE else 14 if f & F_TUNNEL else VERGE
     check_clearance(course["name"], rec)
     props = place_scenery(course, rec, seed)
     return rec, total, props
@@ -345,18 +352,23 @@ def place_scenery(course, rec, seed):
             while dist > spacing:
                 dist -= spacing
                 for side in (-1, 1):
-                    if rnd.random() < 0.35:
+                    if rnd.random() < (0.08 if kind == P_CLIFF else 0.35):
                         continue
-                    off = barrier_dist(r) + 60 + rnd.random() * (260 if kind != P_ROCK else 40)
+                    if kind == P_CLIFF:
+                        off = barrier_dist(r) + 75 + rnd.random() * 30
+                    else:
+                        off = barrier_dist(r) + 60 + rnd.random() * (260 if kind != P_ROCK else 40)
                     along = rnd.random() * r["len"]
                     px = r["x"] + r["ux"] * along + r["uz"] * off * side
                     pz = r["z"] + r["uz"] * along - r["ux"] * off * side
-                    radius = {P_BUILDING: 110, P_HOUSE: 70, P_ROCK: 60, P_COLUMN: 30}.get(kind, 40)
+                    radius = {P_BUILDING: 110, P_HOUSE: 70, P_ROCK: 60, P_COLUMN: 30, P_CLIFF: 20}.get(kind, 40)
                     if not (300 < px < 7900 and 300 < pz < 7900):
                         continue
                     if not clear(px, pz, radius) or not free(px, pz, radius):
                         continue
                     rot = int((math.degrees(r["head"]) % 360) / 90 + 0.5) & 3
+                    if kind == P_CLIFF:      # full heading, so the face lines up with the road
+                        rot = int((r["head"] % (2 * math.pi)) / (2 * math.pi) * 256) & 255
                     var = rnd.randrange(256)
                     props.append((kind, px, pz, rot, var))
                     occupied.append((px, pz, radius))

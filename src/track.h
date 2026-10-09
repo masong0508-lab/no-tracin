@@ -19,7 +19,7 @@ typedef struct {
     u8 flags, verge;          // TF_* and the grass width outside the road
 } TrackPt;
 
-enum { TF_KERB_L = 1, TF_KERB_R = 2, TF_BRIDGE = 4, TF_START = 8 };
+enum { TF_KERB_L = 1, TF_KERB_R = 2, TF_BRIDGE = 4, TF_START = 8, TF_TUNNEL = 16 };
 
 typedef struct { u8 type, rot, var, y2; s16 x, z; } Prop;   // y2 = ground height / 2
 
