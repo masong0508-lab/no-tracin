@@ -60,9 +60,10 @@ F_KERB_L, F_KERB_R, F_BRIDGE, F_START, F_TUNNEL = 1, 2, 4, 8, 16
 # (x, z, height, attr) on the 1/SCALE plan (water and landmarks too).
 # Clockwise unless noted; heading 0 is +z (north), turning right goes
 # toward +x. laps, start_time and cp_time set the arcade race: laps, and
-# seconds on the clock at the start and at each checkpoint.
+# seconds on the clock at the start and at each checkpoint (sized for the
+# full-scale circuits: a clean lap takes about a minute).
 BIG_FOREST = dict(
-    name="BIG FOREST", start=1, level="BEGINNER", laps=3, start_time=55, cp_time=28,
+    name="BIG FOREST", start=1, level="BEGINNER", laps=3, start_time=64, cp_time=32,
     theme="forest",
     points=[
         (2000, 1700, 0, 0),
@@ -116,7 +117,7 @@ BIG_FOREST = dict(
 )
 
 BAY_BRIDGE = dict(
-    name="BAY BRIDGE", start=1, level="MEDIUM", laps=3, start_time=48, cp_time=24,
+    name="BAY BRIDGE", start=1, level="MEDIUM", laps=3, start_time=64, cp_time=32,
     theme="bay",
     points=[
         (2300, 1500, 0, 0),
@@ -165,7 +166,7 @@ BAY_BRIDGE = dict(
 )
 
 ACROPOLIS = dict(
-    name="ACROPOLIS", start=1, level="EXPERT", laps=3, start_time=56, cp_time=30,
+    name="ACROPOLIS", start=1, level="EXPERT", laps=3, start_time=62, cp_time=32,
     theme="acropolis",
     points=[
         (1800, 1800, 0, 0),

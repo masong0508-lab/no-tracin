@@ -2993,8 +2993,8 @@ static const s16 bf_water[4] = {
 #define BF_MARKS 6
 #define BF_WATER 1
 #define BF_LAPS 3
-#define BF_START_TIME 55
-#define BF_CP_TIME 28
+#define BF_START_TIME 64
+#define BF_CP_TIME 32
 
 // BAY BRIDGE: 207 points, lap 29858 units, 162 props
 static const TrackPt bb_pts[207] = {
@@ -5466,8 +5466,8 @@ static const s16 bb_water[8] = {
 #define BB_MARKS 5
 #define BB_WATER 2
 #define BB_LAPS 3
-#define BB_START_TIME 48
-#define BB_CP_TIME 24
+#define BB_START_TIME 64
+#define BB_CP_TIME 32
 
 // ACROPOLIS: 245 points, lap 35260 units, 538 props
 static const TrackPt ac_pts[245] = {
@@ -8435,6 +8435,6 @@ static const s16 ac_water[4] = {
 #define AC_MARKS 4
 #define AC_WATER 0
 #define AC_LAPS 3
-#define AC_START_TIME 56
-#define AC_CP_TIME 30
+#define AC_START_TIME 62
+#define AC_CP_TIME 32
 
