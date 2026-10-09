@@ -145,6 +145,7 @@ static void rivals_step(Car *player, s32 started, s32 plat)
     const TrackDef *t = g_track;
     s32 px = player->x >> 8, pz = player->z >> 8;
     s32 pspeed = car_speed(player);
+    s32 tow = 0;
     for (s32 i = 0; i < RIVALS && g_race.mode == RACE_ARCADE; i++) {
         Rival *r = &rivals[i];
         if (started) {
@@ -188,6 +189,10 @@ static void rivals_step(Car *player, s32 started, s32 plat)
         if (!far || ((g_race.total_steps + i) & 3) == 0 || !started) rival_pose(r);
         if (far) continue;
 
+        // Slipstream: tucked in close behind a car at speed, the air drag drops.
+        s32 lead = (r->s >> 8) - g_race.progress;
+        if (lead > 60 && lead < 450 && iabs(r->lat - plat) < 36 && pspeed > 1200) tow = 1;
+
         // Contact with the player.
         s32 dx = px - r->x, dz = pz - r->z;
         if (iabs(dx) > 70 || iabs(dz) > 70 || iabs((player->y - r->y) >> 8) > 40) continue;
@@ -206,10 +211,20 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             player->hit = -rel;
             if (-rel > 120) sound_play(SFX_SCRAPE);
         }
+        // A side hit shoves the rival across the road.
+        s32 shove = pen > 8 ? 8 : pen;
+        r->lat += r->lat > plat ? shove : -shove;
+        if (r->lat > 70) r->lat = 70; else if (r->lat < -70) r->lat = -70;
+        r->lat_target = r->lat;
         // Whoever was behind loses a little speed.
         if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
         else r->v += 40;
     }
+    if (tow && player->mode == CAR_GROUND) {
+        player->vx += player->vx >> 10;
+        player->vz += player->vz >> 10;
+    }
+    g_race.slipstream = tow;
 }
 
 void race_step(Car *player, s32 started)
@@ -361,6 +376,7 @@ void race_hud(const Car *car, s32 frame)
         p = put(buf, "/");
         put_num(p, RIVALS + 1);
         hud_text(6, 29, buf, 0, PAL_CYAN);
+        if (g->slipstream && (frame & 8)) hud_text(6, 40, "SLIPSTREAM", 0, PAL_GREEN);
     } else {
         hud_text(6, 3, "FREE RUN", 0, PAL_YELLOW);
     }

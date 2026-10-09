@@ -25,6 +25,7 @@ typedef struct {
     s32 state, end_timer;
     s32 extend_flash, wrong_way, wrong_steps;
     s32 new_best_lap, new_best_race;
+    s32 slipstream;           // tucked in behind a rival this step
 } Race;
 
 extern Race g_race;
