@@ -6,7 +6,8 @@
 extern volatile u32 g_frames;
 
 #define MAX_SOLIDS   2400
-#define MAX_FEATURES 160     // feat_refs holds feature numbers as bytes
+#define MAX_STATIC   160     // the city's own features
+#define MAX_FEATURES (MAX_STATIC + MAX_DYN)   // feat_refs holds feature numbers as bytes
 
 // base: where it starts above the ground, in 4-unit steps (a tower on a podium).
 typedef struct { s16 x0, z0, x1, z1, h; u8 material, base; } Solid;
@@ -19,18 +20,24 @@ typedef struct { s16 x0, z0, x1, z1, h; u8 material, base; } Solid;
 // F_BANKLEAD: straight lead-in to the bank: height runs across x from h0
 //         (at x0) to h1 (at x1) and eases in along z from nothing at z0 to
 //         full at z1, with a rail on the high edge.
-enum { F_RAMP, F_WATER, F_BANK, F_BANKLEAD };
+// F_DRAMP, F_DWALL, F_DPAD: placed in the editor (DYN_RAMP...), turned to
+//         any heading. x0..z1 is only their bounding box; the rest of the
+//         shape is in dyn[], one per feature from static_count on.
+enum { F_RAMP, F_WATER, F_BANK, F_BANKLEAD, F_DRAMP, F_DWALL, F_DPAD };
 typedef struct { u8 type, axis; s16 x0, z0, x1, z1, h0, h1; } Feature;
+typedef struct { s16 cx, cz, hw, hl, fx, fz, angle; } Dyn;   // fx, fz: the heading, Q14
 
 // The world's tables live in EWRAM: IWRAM is kept for code and the stack.
 static Solid   solids[MAX_SOLIDS] EWRAM_BSS;
 static s32     solid_count;
 static Feature features[MAX_FEATURES] EWRAM_BSS;
 static s32     feature_count;
+static s32     static_count EWRAM_BSS;    // features from here on are the editor's
+static Dyn     dyn[MAX_DYN] EWRAM_BSS;
 static u8      block_kind[BLOCKS][BLOCKS] EWRAM_BSS;
 // Features touching each block, so height and wall queries only look at
 // the few that can matter.
-#define MAX_FEAT_REFS 512
+#define MAX_FEAT_REFS 768
 static u8      feat_refs[MAX_FEAT_REFS] EWRAM_BSS;
 static u16     cell_first[BLOCKS][BLOCKS] EWRAM_BSS;
 static u8      cell_count[BLOCKS][BLOCKS] EWRAM_BSS;
@@ -76,7 +83,7 @@ static void add_upper(s32 x0, s32 z0, s32 x1, s32 z1, s32 y0, s32 h, s32 materia
 
 static void add_feature(s32 type, s32 axis, s32 x0, s32 z0, s32 x1, s32 z1, s32 h0, s32 h1)
 {
-    if (feature_count >= MAX_FEATURES) { world_overflow++; return; }
+    if (feature_count >= MAX_STATIC) { world_overflow++; return; }
     Feature *f = &features[feature_count++];
     f->type = type; f->axis = axis;
     f->x0 = x0; f->z0 = z0; f->x1 = x1; f->z1 = z1; f->h0 = h0; f->h1 = h1;
@@ -284,14 +291,55 @@ static s32 features_at(s32 x, s32 z, const u8 **first)
     return cell_count[bz][bx];
 }
 
+// (x, z) in a placed feature's own frame: along its heading and across it
+// (to the right). Returns 0 when outside it.
+static s32 dyn_local(s32 i, s32 x, s32 z, s32 *along, s32 *across)
+{
+    const Dyn *d = &dyn[i - static_count];
+    s32 dx = x - d->cx, dz = z - d->cz;
+    *along = (dx * d->fx + dz * d->fz) >> 14;
+    *across = (dx * d->fz - dz * d->fx) >> 14;
+    return *along >= -d->hl && *along < d->hl && *across >= -d->hw && *across < d->hw;
+}
+
 static void build_feature_faces(void);
 
 void world_init(void)
 {
     build_city();
     build_stunts();
+    static_count = feature_count;
     index_features();
     build_feature_faces();
+}
+
+// ---------------------------------------------------------------- editor features
+
+void world_dyn_clear(void)
+{
+    feature_count = static_count;
+}
+
+s32 world_dyn_add(s32 kind, s32 x, s32 z, s32 angle, s32 half_w, s32 half_l, s32 h0, s32 h1)
+{
+    if (feature_count >= MAX_FEATURES) return 0;
+    Dyn *d = &dyn[feature_count - static_count];
+    Feature *f = &features[feature_count++];
+    s32 fx = isin(angle), fz = icos(angle);
+    d->cx = x; d->cz = z; d->hw = half_w; d->hl = half_l; d->fx = fx; d->fz = fz; d->angle = angle;
+    // Bounding box of the turned rectangle.
+    s32 ax = fx < 0 ? -fx : fx, az = fz < 0 ? -fz : fz;
+    s32 ex = ((ax * half_l + az * half_w) >> 14) + 1, ez = ((az * half_l + ax * half_w) >> 14) + 1;
+    f->type = kind == DYN_RAMP ? F_DRAMP : kind == DYN_WALL ? F_DWALL : F_DPAD;
+    f->axis = 0;
+    f->x0 = x - ex; f->x1 = x + ex; f->z0 = z - ez; f->z1 = z + ez;
+    f->h0 = h0; f->h1 = h1;
+    return 1;
+}
+
+void world_dyn_done(void)
+{
+    index_features();
 }
 
 // ---------------------------------------------------------------- physics queries
@@ -332,6 +380,14 @@ s32 world_height(s32 x, s32 z)
         if (f->type == F_BANKLEAD) {
             s32 b = lead_height(f, x, z);
             if (b > h) h = b;
+            continue;
+        }
+        if (f->type >= F_DRAMP) {
+            s32 a, c;
+            if (f->type != F_DRAMP || !dyn_local(list[k], x, z, &a, &c)) continue;
+            s32 hl = dyn[list[k] - static_count].hl;
+            s32 r = (f->h0 << 8) + (((f->h1 - f->h0) << 8) * (a + hl)) / (2 * hl);
+            if (r > h) h = r;
             continue;
         }
         s32 along = f->axis ? x - f->x0 : z - f->z0;
@@ -397,6 +453,30 @@ static void deeper(s32 pen, s32 nx, s32 nz, s32 *best, s32 *bx, s32 *bz)
     if (pen > *best) { *best = pen; *bx = nx; *bz = nz; }
 }
 
+// A turned wall against a circle: the nearest point of the rectangle, in
+// its own frame, and the push back out into the world.
+static void dyn_wall(s32 i, s32 x, s32 z, s32 radius, s32 *best, s32 *nx, s32 *nz)
+{
+    const Dyn *d = &dyn[i - static_count];
+    s32 dx = x - d->cx, dz = z - d->cz;
+    s32 a = (dx * d->fx + dz * d->fz) >> 14, b = (dx * d->fz - dz * d->fx) >> 14;
+    s32 ca = a < -d->hl ? -d->hl : a > d->hl ? d->hl : a;
+    s32 cb = b < -d->hw ? -d->hw : b > d->hw ? d->hw : b;
+    s32 da = a - ca, db = b - cb, d2 = da * da + db * db, la, lb, pen;
+    if (d2 >= radius * radius) return;
+    if (d2 == 0) {
+        // Centre inside: out the nearest side.
+        s32 ma = d->hl - (a < 0 ? -a : a), mb = d->hw - (b < 0 ? -b : b);
+        if (ma < mb) { pen = ma + radius; la = a < 0 ? -16384 : 16384; lb = 0; }
+        else         { pen = mb + radius; lb = b < 0 ? -16384 : 16384; la = 0; }
+    } else {
+        s32 l = isqrt(d2);
+        pen = radius - l;
+        la = (da << 14) / l; lb = (db << 14) / l;
+    }
+    deeper(pen, (la * d->fx + lb * d->fz) >> 14, (la * d->fz - lb * d->fx) >> 14, best, nx, nz);
+}
+
 s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
 {
     if (g_track) return track_collide(x, z, radius, nx, nz);
@@ -439,6 +519,11 @@ s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
     s32 n = features_at(x, z, &list);
     for (s32 k = 0; k < n; k++) {
         const Feature *f = &features[list[k]];
+        if (f->type == F_DWALL) {
+            if (x + radius > f->x0 && x - radius < f->x1 && z + radius > f->z0 && z - radius < f->z1)
+                dyn_wall(list[k], x, z, radius, &best, nx, nz);
+            continue;
+        }
         if (f->type == F_BANKLEAD) {
             if (z < f->z0 || z > f->z1) continue;
             s32 rail = f->h0 > f->h1 ? f->x0 : f->x1;
@@ -458,6 +543,34 @@ s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
         else           deeper(f->z1 + radius - r, ux, uz, &best, nx, nz);
     }
     return best;
+}
+
+s32 world_dyn_pad(s32 x, s32 z)
+{
+    if (g_track) return 0;
+    const u8 *list;
+    s32 n = features_at(x, z, &list), a, b;
+    for (s32 k = 0; k < n; k++) {
+        s32 i = list[k];
+        if (features[i].type == F_DPAD && dyn_local(i, x, z, &a, &b)) return 1;
+    }
+    return 0;
+}
+
+s32 world_blocked(s32 x, s32 z, s32 r)
+{
+    if (x < r || z < r || x >= WORLD - r || z >= WORLD - r) return 1;
+    if (world_in_water(x, z)) return 1;
+    for (s32 bz = (z - r) / BLOCK; bz <= (z + r) / BLOCK; bz++)
+        for (s32 bx = (x - r) / BLOCK; bx <= (x + r) / BLOCK; bx++) {
+            if (bx >= BLOCKS || bz >= BLOCKS) continue;
+            s32 first = block_first[bz][bx], end = first + block_count[bz][bx];
+            for (s32 i = first; i < end; i++) {
+                const Solid *s = &solids[i];
+                if (x > s->x0 - r && x < s->x1 + r && z > s->z0 - r && z < s->z1 + r) return 1;
+            }
+        }
+    return 0;
 }
 
 void loop_point(s32 theta, s32 *x, s32 *y, s32 *z)
@@ -491,8 +604,8 @@ typedef struct {
 #define MAX_WORLD_FACES 704
 static WorldFace world_faces[MAX_WORLD_FACES] EWRAM_BSS;
 static s32 world_face_count;
-static u16 feat_face_first[MAX_FEATURES + 1] EWRAM_BSS;   // the loop goes last
-static u8  feat_face_count[MAX_FEATURES + 1] EWRAM_BSS;
+static u16 feat_face_first[MAX_STATIC + 1] EWRAM_BSS;   // the loop goes last
+static u8  feat_face_count[MAX_STATIC + 1] EWRAM_BSS;
 
 static void add_face(const Vec3 *q, s32 n, u8 color, u32 flags)
 {
@@ -664,6 +777,81 @@ static void build_feature_faces(void)
     }
 }
 
+// A placed feature, drawn from scratch each frame (there are few, and this
+// keeps them out of the face table). Corners: back left, back right, front
+// right, front left, as the ramp would be laid along +z; the faces follow
+// draw_ramp's.
+void world_draw_dyn(s32 kind, s32 x, s32 z, s32 angle, s32 half_w, s32 half_l, s32 h0, s32 h1)
+{
+    s32 fx = isin(angle), fz = icos(angle);
+    s32 lx = (fx * half_l) >> 14, lz = (fz * half_l) >> 14;      // along
+    s32 wx = (fz * half_w) >> 14, wz = (-fx * half_w) >> 14;     // across, to the right
+    s32 cx[4] = { x - lx - wx, x - lx + wx, x + lx + wx, x + lx - wx };
+    s32 cz[4] = { z - lz - wz, z - lz + wz, z + lz + wz, z + lz - wz };
+    if (kind == DYN_PAD) {
+        // A cyan pad with two yellow chevrons pointing the way.
+        Vec3 q[4] = { { cx[3], 0, cz[3] }, { cx[2], 0, cz[2] }, { cx[1], 0, cz[1] }, { cx[0], 0, cz[0] } };
+        r_ground(q, 4, COLOR(M_HUD, 3));
+        for (s32 k = 0; k < 2; k++) {
+            s32 t = half_l * (2 - 3 * k) / 5, b = t - half_l * 2 / 5, w = half_w * 3 / 4;
+            Vec3 c[3] = {
+                { x + ((fx * t) >> 14), 0, z + ((fz * t) >> 14) },
+                { x + ((fx * b + fz * w) >> 14), 0, z + ((fz * b - fx * w) >> 14) },
+                { x + ((fx * b - fz * w) >> 14), 0, z + ((fz * b + fx * w) >> 14) },
+            };
+            r_ground(c, 3, COLOR(M_LINE, 0));
+        }
+        return;
+    }
+    if (kind == DYN_WALL) {
+        s32 m[9] = { fz, 0, -fx, 0, 16384, 0, fx, 0, fz };
+        r_box_mat(x, 0, z, m, -half_w, 0, -half_l, half_w, h0, half_l, M_STUNT_RED);
+        return;
+    }
+    u32 fl = RF_SURFACE;
+    // The top, with a red band across the high end so you can see from
+    // above which way it launches. t: where the band meets the rest, Q8 of
+    // the way from the back.
+    s32 t = h1 >= h0 ? 218 : 38, ht = h0 + (((h1 - h0) * t) >> 8);
+    s32 mlx = cx[0] + (((cx[3] - cx[0]) * t) >> 8), mlz = cz[0] + (((cz[3] - cz[0]) * t) >> 8);
+    s32 mrx = cx[1] + (((cx[2] - cx[1]) * t) >> 8), mrz = cz[1] + (((cz[2] - cz[1]) * t) >> 8);
+    Vec3 front[4] = { { cx[3], h1, cz[3] }, { cx[2], h1, cz[2] }, { mrx, ht, mrz }, { mlx, ht, mlz } };
+    Vec3 back[4] = { { mlx, ht, mlz }, { mrx, ht, mrz }, { cx[1], h0, cz[1] }, { cx[0], h0, cz[0] } };
+    r_face(front, 4, h1 >= h0 ? COLOR(M_STUNT_RED, 0) : COLOR(M_RAMP, 0), fl);
+    r_face(back, 4, h1 >= h0 ? COLOR(M_RAMP, 0) : COLOR(M_STUNT_RED, 0), fl);
+    if (h0) {
+        Vec3 q[4] = { { cx[0], h0, cz[0] }, { cx[1], h0, cz[1] }, { cx[1], 0, cz[1] }, { cx[0], 0, cz[0] } };
+        r_face(q, 4, COLOR(M_STUNT_RED, 1), fl);
+    }
+    if (h1) {
+        Vec3 q[4] = { { cx[2], h1, cz[2] }, { cx[3], h1, cz[3] }, { cx[3], 0, cz[3] }, { cx[2], 0, cz[2] } };
+        r_face(q, 4, COLOR(M_STUNT_RED, 1), fl);
+    }
+    // The sides: a triangle where one end comes down to the ground.
+    for (s32 side = 0; side < 2; side++) {
+        s32 b = side ? 1 : 0, f = side ? 2 : 3;
+        Vec3 q[4];
+        s32 n = 0;
+        // Left: front top, back top, back foot, front foot. Right: back top,
+        // front top, front foot, back foot.
+        s32 first = side ? b : f, second = side ? f : b;
+        s32 hf = side ? h0 : h1, hs = side ? h1 : h0;
+        if (hf) { q[n].x = cx[first]; q[n].y = hf; q[n].z = cz[first]; n++; }
+        if (hs) { q[n].x = cx[second]; q[n].y = hs; q[n].z = cz[second]; n++; }
+        q[n].x = cx[second]; q[n].y = 0; q[n].z = cz[second]; n++;
+        q[n].x = cx[first]; q[n].y = 0; q[n].z = cz[first]; n++;
+        if (n >= 3) r_face(q, n, COLOR(M_RAMP, side ? 3 : 2), fl);
+    }
+}
+
+// Thumb code in ROM, like paint_street: the IWRAM caller stays small.
+static __attribute__((noinline)) void draw_placed(s32 i)
+{
+    const Feature *f = &features[i];
+    const Dyn *d = &dyn[i - static_count];
+    world_draw_dyn(f->type - F_DRAMP, d->cx, d->cz, d->angle, d->hw, d->hl, f->h0, f->h1);
+}
+
 IWRAM_CODE static void queue_feature(s32 i)
 {
     const WorldFace *w = &world_faces[feat_face_first[i]];
@@ -795,14 +983,15 @@ IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
             if (seen[i >> 5] & (1u << (i & 31))) continue;
             seen[i >> 5] |= 1u << (i & 31);
             const Feature *f = &features[i];
-            if (f->type == F_BANK ? visible(f->x0, f->z0 + f->z1 / 2, f->z1)
-                                  : visible((f->x0 + f->x1) >> 1, (f->z0 + f->z1) >> 1,
-                                            (f->x1 - f->x0 + f->z1 - f->z0) >> 1))
-                queue_feature(i);
+            if (!(f->type == F_BANK ? visible(f->x0, f->z0 + f->z1 / 2, f->z1)
+                                    : visible((f->x0 + f->x1) >> 1, (f->z0 + f->z1) >> 1,
+                                              (f->x1 - f->x0 + f->z1 - f->z0) >> 1))) continue;
+            if (i < static_count) queue_feature(i);
+            else draw_placed(i);
         }
     }
     if (visible(the_loop.x, the_loop.z, 300))
-        queue_feature(feature_count);
+        queue_feature(static_count);
 
     // Buildings.
     for (s32 b = 0; b < shown_count; b++) {

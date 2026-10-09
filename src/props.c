@@ -35,7 +35,7 @@ typedef struct {
     u8 kind, awake, still, down;
 } Loose;
 
-#define MAX_PROPS 64
+#define MAX_PROPS 124           // 60 of the city's own, the rest for the map editor (cells hold s8)
 static Loose props[MAX_PROPS] EWRAM_BSS;
 static s32 nprops EWRAM_BSS, smashed EWRAM_BSS, burst EWRAM_BSS, burst_n EWRAM_BSS, burst_timer EWRAM_BSS;
 
@@ -69,6 +69,13 @@ static void pyramid(s32 x, s32 z, s32 n)
     for (s32 row = 0; row < n; row++)
         for (s32 i = 0; i < n - row; i++)
             add(K_CRATE, x + (i * 2 - (n - row - 1)) * 8, z, row * 16, 0);
+}
+
+s32 props_add(s32 kind, s32 x, s32 z, s32 y, s32 heading)
+{
+    if (nprops >= MAX_PROPS || kind < 0 || kind >= K_COUNT) return 0;
+    add(kind, x, z, y, heading);
+    return 1;
 }
 
 void props_reset(void)

@@ -77,4 +77,22 @@ s32 world_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz);
 // Loop centreline at angle theta (1024 units), in Q8 world units.
 void loop_point(s32 theta, s32 *x, s32 *y, s32 *z);
 
+// Things placed with the map editor: ramps, walls and boost pads standing
+// at any heading. They join the stunt features, so the car (either physics
+// model) and the props drive up them and bump into them like the built-in
+// ones. Each is a rectangle centred on (x, z), half_w across and half_l
+// along `angle` (1024 units, 0 = +z: the way you drive up a ramp). A ramp
+// runs from h0 at its back to h1 at its front; a wall is h0 tall; a pad is
+// flat and fires the nitro.
+enum { DYN_RAMP, DYN_WALL, DYN_PAD };
+#define MAX_DYN 64
+void world_dyn_clear(void);
+s32  world_dyn_add(s32 kind, s32 x, s32 z, s32 angle, s32 half_w, s32 half_l, s32 h0, s32 h1);   // 0 when full
+void world_dyn_done(void);                // after adding: re-index them for the queries
+s32  world_dyn_pad(s32 x, s32 z);         // on a boost pad?
+// Draws one without adding it (the editor's preview).
+void world_draw_dyn(s32 kind, s32 x, s32 z, s32 angle, s32 half_w, s32 half_l, s32 h0, s32 h1);
+// A building, tree, water or the edge of the city within r of (x, z)?
+s32  world_blocked(s32 x, s32 z, s32 r);
+
 #endif
