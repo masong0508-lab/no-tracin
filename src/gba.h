@@ -77,10 +77,10 @@ enum {
 #define FAR_MAX_CITY   1500
 #define FOG1_CITY      620
 #define FOG2_CITY      1020
-#define FAR_MIN_TRACK  950
-#define FAR_MAX_TRACK  1500
-#define FOG1_TRACK     620
-#define FOG2_TRACK     1020
+#define FAR_MIN_TRACK  1500
+#define FAR_MAX_TRACK  2400
+#define FOG1_TRACK     1000
+#define FOG2_TRACK     1600
 #define FAR_MENU       1100     // title and menu flyovers
 
 typedef struct { s32 x, y, z; } Vec3;

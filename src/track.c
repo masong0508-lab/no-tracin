@@ -6,13 +6,17 @@
 
 #include "tracks_data.h"
 
+// Laps and the race clock come from the course definitions in mktracks.py.
 const TrackDef g_tracks[TRACK_COUNT] = {
     { "BIG FOREST", "BEGINNER", bf_pts, BF_POINTS, BF_LAP, bf_cell_first, bf_cell_count, bf_cell_list,
-      bf_props, bf_prop_first, bf_prop_count, BF_PROPS, bf_water, BF_WATER, 4, 42, 17, SCENE_FOREST },
+      bf_props, bf_prop_first, bf_prop_count, BF_PROPS, bf_water, BF_WATER,
+      BF_LAPS, BF_START_TIME, BF_CP_TIME, SCENE_FOREST },
     { "BAY BRIDGE", "MEDIUM", bb_pts, BB_POINTS, BB_LAP, bb_cell_first, bb_cell_count, bb_cell_list,
-      bb_props, bb_prop_first, bb_prop_count, BB_PROPS, bb_water, BB_WATER, 4, 38, 15, SCENE_BAY },
+      bb_props, bb_prop_first, bb_prop_count, BB_PROPS, bb_water, BB_WATER,
+      BB_LAPS, BB_START_TIME, BB_CP_TIME, SCENE_BAY },
     { "ACROPOLIS", "EXPERT", ac_pts, AC_POINTS, AC_LAP, ac_cell_first, ac_cell_count, ac_cell_list,
-      ac_props, ac_prop_first, ac_prop_count, AC_PROPS, ac_water, AC_WATER, 4, 44, 18, SCENE_MOUNTAINS },
+      ac_props, ac_prop_first, ac_prop_count, AC_PROPS, ac_water, AC_WATER,
+      AC_LAPS, AC_START_TIME, AC_CP_TIME, SCENE_MOUNTAINS },
 };
 
 const TrackDef *g_track;
@@ -20,9 +24,13 @@ const TrackDef *g_track;
 #define MAX_POINTS 256
 #define RAIL_H     16
 #define BANK       2        // embankments fall 1 unit for every 1 outward
+#define TOWER_SPAN 1600     // bridges this long get suspension towers,
+#define TOWER_H    360      // this tall above the deck,
+#define CABLE_REACH 700     // with cables reaching this far along it
+#define PIER_SHIFT 9        // piers under a bridge every 512 units
 
 static s16 nrx[MAX_POINTS] EWRAM_BSS, nrz[MAX_POINTS] EWRAM_BSS;   // right-pointing normal at each point, Q14
-static u8  tower_at[MAX_POINTS] EWRAM_BSS;     // bridge towers stand at these points
+static u8  tower_at[MAX_POINTS] EWRAM_BSS;     // bridge towers: points their cables reach, 0 = none
 static u16 inv_len[MAX_POINTS] EWRAM_BSS;      // 65536 / length of each stretch
 s16 track_pitch[MAX_POINTS] EWRAM_BSS;         // slope of each stretch, 1024-unit angle
 // Bounding circles of runs of 8 points, to skip whole stretches off screen.
@@ -32,7 +40,17 @@ static s16 blk_x[MAX_POINTS / BLOCK_PTS] EWRAM_BSS, blk_z[MAX_POINTS / BLOCK_PTS
 enum {
     P_TREE, P_PINE, P_BUILDING, P_STAND, P_FERRIS, P_TENT, P_TOWER, P_ROCK,
     P_COLUMN, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_HOUSE, P_SIGN, P_BOAT,
-    P_CLIFF, P_COASTER,
+    P_CLIFF, P_COASTER, P_COUNT
+};
+
+// Landmarks: drawn before the rest of the scenery, and from further off.
+#define BIG_PROPS (1 << P_FERRIS | 1 << P_TEMPLE | 1 << P_STAND | 1 << P_BALLOON | 1 << P_LIGHTHOUSE | \
+                   1 << P_TOWER | 1 << P_COASTER | 1 << P_CRANE)
+// How far each landmark reaches from its spot, for culling (mktracks.py
+// keeps the road and the other scenery clear by the same sizes).
+static const u16 prop_reach[P_COUNT] = {
+    [P_STAND] = 330, [P_FERRIS] = 260, [P_TOWER] = 40, [P_TEMPLE] = 300, [P_CRANE] = 335,
+    [P_LIGHTHOUSE] = 60, [P_BALLOON] = 100, [P_COASTER] = 545,
 };
 
 // ---------------------------------------------------------------- queries
@@ -45,7 +63,7 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
 {
     const TrackDef *t = g_track;
     if (x < 0 || z < 0 || x >= TRACK_WORLD || z >= TRACK_WORLD) return 0;
-    s32 cell = (z >> 7) * 64 + (x >> 7);
+    s32 cell = (z >> TRACK_CELL_SHIFT) * TRACK_GRID + (x >> TRACK_CELL_SHIFT);
     s32 n = t->cell_count[cell];
     if (!n) return 0;
     const u8 *list = &t->cell_list[t->cell_first[cell]];
@@ -207,14 +225,18 @@ void track_load(s32 index)
         const TrackPt *c = &t->pts[i + 1 == t->count ? 0 : i + 1];
         track_pitch[i] = iatan2(c->y - b->y, b->len ? b->len : 1);
     }
-    // Bridge towers a quarter and three quarters of the way across long spans.
+    // Bridge towers a quarter and three quarters of the way across long
+    // spans, their cables reaching CABLE_REACH units each way.
     for (s32 i = 0; i < t->count; i++) {
         if (!(t->pts[i].flags & TF_BRIDGE) || (t->pts[i ? i - 1 : t->count - 1].flags & TF_BRIDGE)) continue;
-        s32 n = 0;
-        while (n < t->count && (t->pts[(i + n) % t->count].flags & TF_BRIDGE)) n++;
-        if (n >= 10) {
-            tower_at[(i + n / 4) % t->count] = 1;
-            tower_at[(i + n * 3 / 4) % t->count] = 1;
+        s32 n = 0, span = 0;
+        while (n < t->count && (t->pts[(i + n) % t->count].flags & TF_BRIDGE)) span += t->pts[(i + n++) % t->count].len;
+        if (span >= TOWER_SPAN) {
+            s32 k = CABLE_REACH / (span / n);
+            if (k > n / 4) k = n / 4;
+            if (k < 1) k = 1;
+            tower_at[(i + n / 4) % t->count] = k;
+            tower_at[(i + n * 3 / 4) % t->count] = k;
         }
     }
     for (s32 b = 0; b * BLOCK_PTS < t->count; b++) {
@@ -293,10 +315,10 @@ static void roof(s32 x0, s32 z0, s32 x1, s32 z1, s32 y, s32 h, s32 along_x, s32 
 
 static void draw_ferris(s32 x, s32 y, s32 z, s32 frame)
 {
-    const s32 R = 170, cy = y + R + 40, spokes = 12;
+    const s32 R = 255, cy = y + R + 60, spokes = 12;
     // A-frame legs.
-    face4(x - 70, y, z - 14, x - 4, cy, z - 14, x + 4, cy, z - 14, x + 70, y, z - 14, COLOR(M_STUNT_WHITE, 2), RF_TWO_SIDED);
-    face4(x - 70, y, z + 14, x - 4, cy, z + 14, x + 4, cy, z + 14, x + 70, y, z + 14, COLOR(M_STUNT_WHITE, 2), RF_TWO_SIDED);
+    face4(x - 105, y, z - 21, x - 6, cy, z - 21, x + 6, cy, z - 21, x + 105, y, z - 21, COLOR(M_STUNT_WHITE, 2), RF_TWO_SIDED);
+    face4(x - 105, y, z + 21, x - 6, cy, z + 21, x + 6, cy, z + 21, x + 105, y, z + 21, COLOR(M_STUNT_WHITE, 2), RF_TWO_SIDED);
     s32 spin = frame * 2;
     s32 px = 0, py = 0;
     for (s32 i = 0; i <= spokes; i++) {
@@ -307,10 +329,10 @@ static void draw_ferris(s32 x, s32 y, s32 z, s32 frame)
             face4(x + px, cy + py, z, x + ex, cy + ey, z, x + ex - (ex >> 4), cy + ey - (ey >> 4), z,
                   x + px - (px >> 4), cy + py - (py >> 4), z, COLOR(i & 1 ? M_STUNT_RED : M_LINE, 0), RF_TWO_SIDED);
             if (i & 1)
-                face4(x - 2, cy, z, x + 2, cy, z, x + ex + 2, cy + ey, z, x + ex - 2, cy + ey, z,
+                face4(x - 3, cy, z, x + 3, cy, z, x + ex + 3, cy + ey, z, x + ex - 3, cy + ey, z,
                       COLOR(M_STUNT_WHITE, 1), RF_TWO_SIDED);
             else
-                r_box(x + ex - 9, cy + ey - 22, z - 9, x + ex + 9, cy + ey - 4, z + 9, i & 2 ? M_BLD2 : M_BLD4);
+                r_box(x + ex - 13, cy + ey - 33, z - 13, x + ex + 13, cy + ey - 6, z + 13, i & 2 ? M_BLD2 : M_BLD4);
         }
         px = ex; py = ey;
     }
@@ -334,28 +356,28 @@ static void draw_tent(s32 x, s32 y, s32 z, s32 var)
 
 static void draw_balloon(s32 x, s32 y, s32 z, s32 frame)
 {
-    s32 cy = y + 380 + ((isin(frame * 3) * 30) >> 14);
-    const s32 r = 60;
+    s32 cy = y + 570 + ((isin(frame * 3) * 45) >> 14);
+    const s32 r = 90;
     s32 px = r, pz = 0;
     for (s32 i = 1; i <= 8; i++) {
         s32 a = i * 128;
         s32 ex = (icos(a) * r) >> 14, ez = (isin(a) * r) >> 14;
         s32 m = i & 1 ? M_LINE : M_STUNT_RED;
-        Vec3 top[3] = { { x, cy + 70, z }, { x + ex, cy, z + ez }, { x + px, cy, z + pz } };
-        Vec3 bot[3] = { { x, cy - 80, z }, { x + px, cy, z + pz }, { x + ex, cy, z + ez } };
+        Vec3 top[3] = { { x, cy + 105, z }, { x + ex, cy, z + ez }, { x + px, cy, z + pz } };
+        Vec3 bot[3] = { { x, cy - 120, z }, { x + px, cy, z + pz }, { x + ex, cy, z + ez } };
         r_face(top, 3, COLOR(m, 0), 0);
         r_face(bot, 3, COLOR(m, 2), 0);
         px = ex; pz = ez;
     }
-    r_box(x - 10, cy - 110, z - 10, x + 10, cy - 94, z + 10, M_BLD1);
+    r_box(x - 15, cy - 165, z - 15, x + 15, cy - 141, z + 15, M_BLD1);
 }
 
 // Grandstand facing direction rot (0 +z, 1 +x, 2 -z, 3 -x), centred on (x, z).
 static void draw_stand(s32 x, s32 y, s32 z, s32 rot)
 {
-    const s32 half = 170;
+    const s32 half = 255;
     for (s32 k = 0; k < 4; k++) {
-        s32 d0 = -k * 30, d1 = -k * 30 - 30, h = 20 + k * 22;   // steps rise away from the road
+        s32 d0 = -k * 45, d1 = -k * 45 - 45, h = 30 + k * 33;   // steps rise away from the road
         s32 m = k == 3 ? M_STUNT_WHITE : (k & 1) ? M_BLD2 : M_BLD3;
         switch (rot) {
         case 0: r_box(x - half, y, z + d1, x + half, y + h, z + d0, m); break;
@@ -366,25 +388,25 @@ static void draw_stand(s32 x, s32 y, s32 z, s32 rot)
     }
     // Roof on posts.
     switch (rot) {
-    case 0: r_box(x - half, y + 120, z - 130, x + half, y + 128, z + 10, M_STUNT_RED); break;
-    case 1: r_box(x - 130, y + 120, z - half, x + 10, y + 128, z + half, M_STUNT_RED); break;
-    case 2: r_box(x - half, y + 120, z - 10, x + half, y + 128, z + 130, M_STUNT_RED); break;
-    default: r_box(x - 10, y + 120, z - half, x + 130, y + 128, z + half, M_STUNT_RED); break;
+    case 0: r_box(x - half, y + 180, z - 195, x + half, y + 192, z + 15, M_STUNT_RED); break;
+    case 1: r_box(x - 195, y + 180, z - half, x + 15, y + 192, z + half, M_STUNT_RED); break;
+    case 2: r_box(x - half, y + 180, z - 15, x + half, y + 192, z + 195, M_STUNT_RED); break;
+    default: r_box(x - 15, y + 180, z - half, x + 195, y + 192, z + half, M_STUNT_RED); break;
     }
 }
 
 static void draw_temple(s32 x, s32 y, s32 z, s32 depth)
 {
-    const s32 w = 160, d = 90, ch = 90;
-    r_box(x - w - 12, y, z - d - 12, x + w + 12, y + 16, z + d + 12, M_BLD3);
+    const s32 w = 240, d = 135, ch = 135;
+    r_box(x - w - 18, y, z - d - 18, x + w + 18, y + 24, z + d + 18, M_BLD3);
     s32 step = depth > 900 ? 2 : 1;
     for (s32 i = 0; i < 6; i += step) {
-        s32 cx = x - w + 8 + i * ((2 * w - 16) / 5);
-        r_box(cx - 8, y + 16, z - d, cx + 8, y + 16 + ch, z - d + 16, M_BLD3);
-        r_box(cx - 8, y + 16, z + d - 16, cx + 8, y + 16 + ch, z + d, M_BLD3);
+        s32 cx = x - w + 12 + i * ((2 * w - 24) / 5);
+        r_box(cx - 12, y + 24, z - d, cx + 12, y + 24 + ch, z - d + 24, M_BLD3);
+        r_box(cx - 12, y + 24, z + d - 24, cx + 12, y + 24 + ch, z + d, M_BLD3);
     }
-    r_box(x - w - 6, y + 16 + ch, z - d - 6, x + w + 6, y + 30 + ch, z + d + 6, M_BLD3);
-    roof(x - w - 6, z - d - 6, x + w + 6, z + d + 6, y + 30 + ch, 34, 1, M_BLD3);
+    r_box(x - w - 9, y + 24 + ch, z - d - 9, x + w + 9, y + 45 + ch, z + d + 9, M_BLD3);
+    roof(x - w - 9, z - d - 9, x + w + 9, z + d + 9, y + 45 + ch, 51, 1, M_BLD3);
 }
 
 // A slab of rock lined up with the road (rot = heading, 256 per turn): the
@@ -409,22 +431,22 @@ static void draw_cliff(s32 x, s32 y, s32 z, s32 rot, s32 v, s32 depth)
 // humped track and a train running along it.
 static void draw_coaster(s32 x, s32 y, s32 z, s32 depth, s32 frame)
 {
-    static const s16 hp[9] = { 50, 130, 230, 270, 210, 120, 80, 160, 60 };
-    const s32 gap = 90, z0 = z - 4 * gap;
+    static const s16 hp[9] = { 75, 195, 345, 405, 315, 180, 120, 240, 90 };
+    const s32 gap = 135, z0 = z - 4 * gap;
     for (s32 i = 0; i < 9; i++) {
         s32 pz = z0 + i * gap;
-        if (depth < 900 || !(i & 1)) r_box(x - 5, y, pz - 5, x + 5, y + hp[i], pz + 5, M_STUNT_WHITE);
+        if (depth < 900 || !(i & 1)) r_box(x - 7, y, pz - 7, x + 7, y + hp[i], pz + 7, M_STUNT_WHITE);
         if (i < 8)
-            face4(x - 14, y + hp[i], pz, x - 14, y + hp[i + 1], pz + gap, x + 14, y + hp[i + 1], pz + gap,
-                  x + 14, y + hp[i], pz, COLOR(M_STUNT_RED, (i & 1) + 1), RF_TWO_SIDED);
+            face4(x - 21, y + hp[i], pz, x - 21, y + hp[i + 1], pz + gap, x + 21, y + hp[i + 1], pz + gap,
+                  x + 21, y + hp[i], pz, COLOR(M_STUNT_RED, (i & 1) + 1), RF_TWO_SIDED);
     }
     // The train goes back and forth along the track.
-    s32 t = (frame * 3) % (16 * gap);
+    s32 t = (frame * 4) % (16 * gap);
     if (t > 8 * gap) t = 16 * gap - t;
     s32 i = t / gap, f = t % gap;
     if (i > 7) { i = 7; f = gap; }
     s32 ty = y + hp[i] + ((hp[i + 1] - hp[i]) * f) / gap, tz = z0 + t;
-    r_box(x - 12, ty, tz - 22, x + 12, ty + 18, tz + 22, M_BLD4);
+    r_box(x - 18, ty, tz - 33, x + 18, ty + 27, tz + 33, M_BLD4);
 }
 
 static void draw_prop(const Prop *p, s32 y, s32 depth, s32 frame)
@@ -461,8 +483,8 @@ static void draw_prop(const Prop *p, s32 y, s32 depth, s32 frame)
     case P_TENT: draw_tent(x, y, z, v + p->rot); break;
     case P_BALLOON: draw_balloon(x, y, z, frame); break;
     case P_TOWER:
-        r_box(x - 12, y, z - 12, x + 12, y + 420, z + 12, M_STUNT_WHITE);
-        r_box(x - 16, y + 420, z - 16, x + 16, y + 450, z + 16, M_STUNT_RED);
+        r_box(x - 18, y, z - 18, x + 18, y + 630, z + 18, M_STUNT_WHITE);
+        r_box(x - 24, y + 630, z - 24, x + 24, y + 675, z + 24, M_STUNT_RED);
         break;
     case P_ROCK: {
         s32 a = 30 + (v & 31), b = 24 + ((v >> 3) & 31), h = 40 + ((v >> 1) & 63);
@@ -483,15 +505,15 @@ static void draw_prop(const Prop *p, s32 y, s32 depth, s32 frame)
     case P_CLIFF: draw_cliff(x, y, z, p->rot, v, depth); break;
     case P_COASTER: draw_coaster(x, y, z, depth, frame); break;
     case P_CRANE:
-        r_box(x - 14, y, z - 14, x + 14, y + 260, z + 14, M_BLD4);
-        r_box(x - 16, y + 260, z - 220, x + 16, y + 280, z + 80, M_BLD4);
-        r_box(x - 20, y + 230, z - 20, x + 20, y + 262, z + 20, M_BLD1);
+        r_box(x - 21, y, z - 21, x + 21, y + 390, z + 21, M_BLD4);
+        r_box(x - 24, y + 390, z - 330, x + 24, y + 420, z + 120, M_BLD4);
+        r_box(x - 30, y + 345, z - 30, x + 30, y + 393, z + 30, M_BLD1);
         break;
     case P_LIGHTHOUSE:
         for (s32 k = 0; k < 5; k++)
-            r_box(x - 24 + k * 2, y + k * 50, z - 24 + k * 2, x + 24 - k * 2, y + k * 50 + 50, z + 24 - k * 2,
+            r_box(x - 36 + k * 3, y + k * 75, z - 36 + k * 3, x + 36 - k * 3, y + k * 75 + 75, z + 36 - k * 3,
                   k & 1 ? M_STUNT_RED : M_STUNT_WHITE);
-        r_box(x - 16, y + 250, z - 16, x + 16, y + 280, z + 16, (frame >> 3) & 1 ? M_LINE : M_GLASS);
+        r_box(x - 24, y + 375, z - 24, x + 24, y + 420, z + 24, (frame >> 3) & 1 ? M_LINE : M_GLASS);
         break;
     case P_SIGN: {
         s32 m = v & 1 ? M_LINE : M_STUNT_RED;
@@ -579,9 +601,68 @@ IWRAM_CODE static void draw_slope(const TrackPt *pts, s32 a, s32 b, s32 oa0, s32
     r_ground_cam(q, 4, color);
 }
 
-// Far off, stretches are drawn two or four at a time. Returns the end point
-// to draw to, or -1 when a longer stretch before this one covers it.
-static s32 lod_stride(s32 depth) { return depth > 600 ? 4 : depth > 260 ? 2 : 1; }
+// Rarely drawn details stay in ROM rather than being inlined into the
+// IWRAM road functions that call them (IWRAM is full).
+#define ROM_CODE __attribute__((noinline))
+
+// Kerbs: red and white blocks along both edges, three to a stretch close
+// up so they stay a car length or so long.
+#define KERB_W 24
+ROM_CODE static void draw_kerbs(const TrackPt *pts, s32 a, s32 b, s32 ya, s32 yb, s32 depth)
+{
+    const s32 W = TRACK_HALF_W;
+    const u8 red = COLOR(M_STUNT_RED, 0), white = COLOR(M_STUNT_WHITE, 0);
+    if (depth >= 450 || b != (a + 1 == g_track->count ? 0 : a + 1)) {
+        u8 k = (a & 1) ? red : white;
+        draw_strip(pts, a, b, -W - KERB_W, -W, ya, yb, k);
+        draw_strip(pts, a, b, W, W + KERB_W, ya, yb, k);
+        return;
+    }
+    const XPt *pa = xget(pts, a), *pb = xget(pts, b);
+    Vec3 l0, l1, r0, r1, q[4];
+    xvert(pa, -W - KERB_W, ya, &l0); xvert(pa, -W, ya, &l1);
+    xvert(pa, W, ya, &r0); xvert(pa, W + KERB_W, ya, &r1);
+    Vec3 dl0, dl1, dr0, dr1;      // a third of the way to b
+    xvert(pb, -W - KERB_W, yb, &dl0); xvert(pb, -W, yb, &dl1);
+    xvert(pb, W, yb, &dr0); xvert(pb, W + KERB_W, yb, &dr1);
+#define THIRD(v, e) v.x = (e.x - v.x) / 3; v.y = (e.y - v.y) / 3; v.z = (e.z - v.z) / 3
+    THIRD(dl0, l0); THIRD(dl1, l1); THIRD(dr0, r0); THIRD(dr1, r1);
+#undef THIRD
+    for (s32 k = 0; k < 3; k++) {
+        u8 c = ((a * 3 + k) & 1) ? red : white;
+        q[0] = l0; q[1] = l1;
+        l0.x += dl0.x; l0.y += dl0.y; l0.z += dl0.z;
+        l1.x += dl1.x; l1.y += dl1.y; l1.z += dl1.z;
+        q[2] = l1; q[3] = l0;
+        r_ground_cam(q, 4, c);
+        q[0] = r0; q[1] = r1;
+        r0.x += dr0.x; r0.y += dr0.y; r0.z += dr0.z;
+        r1.x += dr1.x; r1.y += dr1.y; r1.z += dr1.z;
+        q[2] = r1; q[3] = r0;
+        r_ground_cam(q, 4, c);
+    }
+}
+
+// The chequered start line across the road at point a.
+ROM_CODE static void draw_start_line(const TrackPt *pts, s32 a, s32 ya)
+{
+    const s32 W = TRACK_HALF_W, n = 10, w = 2 * W / 10;
+    const TrackPt *pa = &pts[a];
+    s32 fx = pa->ux >> 9, fz = pa->uz >> 9;      // rows 32 units deep
+    for (s32 i = 0; i < n; i++) {
+        s32 o0 = -W + i * w, o1 = o0 + w;
+        for (s32 row = 0; row < 2; row++)
+            ground4(EX(a, o0) + fx * row, ya, EZ(a, o0) + fz * row, EX(a, o1) + fx * row, ya, EZ(a, o1) + fz * row,
+                    EX(a, o1) + fx * (row + 1), ya, EZ(a, o1) + fz * (row + 1),
+                    EX(a, o0) + fx * (row + 1), ya, EZ(a, o0) + fz * (row + 1),
+                    ((i + row) & 1) ? COLOR(M_SHADOW, 0) : COLOR(M_STUNT_WHITE, 0));
+    }
+}
+
+// Far off, stretches are drawn two or four at a time (about 300 and 600
+// units of road). Returns the end point to draw to, or -1 when a longer
+// stretch before this one covers it.
+static s32 lod_stride(s32 depth) { return depth > 1000 ? 4 : depth > 450 ? 2 : 1; }
 
 static s32 seg_mid_depth(s32 i)
 {
@@ -636,25 +717,8 @@ IWRAM_CODE static void draw_segment(s32 a, s32 depth)
         draw_strip(pts, a, b, -W + 6, -W + 11, ya, yb, line);
         draw_strip(pts, a, b, W - 11, W - 6, ya, yb, line);
     }
-    if ((pa->flags & TF_KERB_L) && !bridge && depth < 900) {
-        u8 k = (a & 1) ? COLOR(M_STUNT_RED, 0) : COLOR(M_STUNT_WHITE, 0);
-        draw_strip(pts, a, b, -W - 14, -W, ya, yb, k);
-        draw_strip(pts, a, b, W, W + 14, ya, yb, k);
-    }
-    if (pa->flags & TF_START) {
-        for (s32 i = 0; i < 8; i++) {
-            s32 o0 = -W + i * (2 * W / 8), o1 = o0 + 2 * W / 8;
-            ground4(EX(a, o0), ya, EZ(a, o0), EX(a, o1), ya, EZ(a, o1),
-                    EX(a, o1) + (pa->ux >> 10), ya, EZ(a, o1) + (pa->uz >> 10),
-                    EX(a, o0) + (pa->ux >> 10), ya, EZ(a, o0) + (pa->uz >> 10),
-                    (i & 1) ? COLOR(M_SHADOW, 0) : COLOR(M_STUNT_WHITE, 0));
-            ground4(EX(a, o0) + (pa->ux >> 10), ya, EZ(a, o0) + (pa->uz >> 10),
-                    EX(a, o1) + (pa->ux >> 10), ya, EZ(a, o1) + (pa->uz >> 10),
-                    EX(a, o1) + (pa->ux >> 9), ya, EZ(a, o1) + (pa->uz >> 9),
-                    EX(a, o0) + (pa->ux >> 9), ya, EZ(a, o0) + (pa->uz >> 9),
-                    (i & 1) ? COLOR(M_STUNT_WHITE, 0) : COLOR(M_SHADOW, 0));
-        }
-    }
+    if ((pa->flags & TF_KERB_L) && !bridge && depth < 900) draw_kerbs(pts, a, b, ya, yb, depth);
+    if (pa->flags & TF_START) draw_start_line(pts, a, ya);
 }
 
 // Walls, railings, gantries and bridge structure: depth-sorted faces.
@@ -672,18 +736,30 @@ static void draw_segment_faces(s32 a, s32 depth)
             s32 xa = EX(a, s * o), za = EZ(a, s * o), xb = EX(b, s * o), zb = EZ(b, s * o);
             face4(xa, ya + RAIL_H, za, xb, yb + RAIL_H, zb, xb, yb - 26, zb, xa, ya - 26, za,
                   COLOR(M_STUNT_WHITE, 1 + (s > 0)), RF_TWO_SIDED);
-            if ((a % 3) == 0 && depth < 1200)
-                r_box(xa - 8, 0, za - 8, xa + 8, ya - 26, za + 8, M_SIDEWALK);
         }
-        if (tower_at[a]) {
-            s32 o2 = TRACK_HALF_W + 20, top = ya + 260;
-            s32 lx = EX(a, -o2), lz = EZ(a, -o2), rx = EX(a, o2), rz = EZ(a, o2);
-            r_box(lx - 12, 0, lz - 12, lx + 12, top, lz + 12, M_STUNT_RED);
-            r_box(rx - 12, 0, rz - 12, rx + 12, top, rz + 12, M_STUNT_RED);
+        // Piers and towers along the stretch (several points of it far off).
+        // Faces always cover the road, so from above the deck the piers
+        // (hidden under it) are left out and the towers start at the deck.
+        const XPt *xa = xget(pts, a);
+        s32 cam_y = -((xa->c.x * xup.x + xa->c.y * xup.y + xa->c.z * xup.z) >> 14);
+        for (s32 i = a; i != b; i = i + 1 == t->count ? 0 : i + 1) {
+            const TrackPt *p = &pts[i];
+            if (!(p->flags & TF_BRIDGE)) continue;
+            s32 above = cam_y > p->y - 26;
+            if (!above && depth < 1200 && (p->dist >> PIER_SHIFT) != ((p->dist + p->len) >> PIER_SHIFT)) {
+                s32 o = TRACK_HALF_W - 30, y = p->y - 26;
+                r_box(EX(i, -o) - 12, 0, EZ(i, -o) - 12, EX(i, -o) + 12, y, EZ(i, -o) + 12, M_SIDEWALK);
+                r_box(EX(i, o) - 12, 0, EZ(i, o) - 12, EX(i, o) + 12, y, EZ(i, o) + 12, M_SIDEWALK);
+            }
+            if (!tower_at[i]) continue;
+            s32 o2 = TRACK_HALF_W + 20, top = p->y + TOWER_H, foot = above ? p->y - 26 : 0;
+            s32 lx = EX(i, -o2), lz = EZ(i, -o2), rx = EX(i, o2), rz = EZ(i, o2);
+            r_box(lx - 16, foot, lz - 16, lx + 16, top, lz + 16, M_STUNT_RED);
+            r_box(rx - 16, foot, rz - 16, rx + 16, top, rz + 16, M_STUNT_RED);
             // Cross beam, then cables sweeping down both ways.
-            face4(lx, top - 10, lz, rx, top - 10, rz, rx, top - 34, rz, lx, top - 34, lz, COLOR(M_STUNT_RED, 1), RF_TWO_SIDED);
+            face4(lx, top - 10, lz, rx, top - 10, rz, rx, top - 40, rz, lx, top - 40, lz, COLOR(M_STUNT_RED, 1), RF_TWO_SIDED);
             for (s32 s = -1; s <= 1; s += 2) {
-                s32 j = a + s * 7;
+                s32 j = i + s * tower_at[i];
                 if (j < 0) j += t->count;
                 if (j >= t->count) j -= t->count;
                 if (!(pts[j].flags & TF_BRIDGE)) continue;
@@ -698,7 +774,7 @@ static void draw_segment_faces(s32 a, s32 depth)
     }
     if (pa->flags & TF_TUNNEL) {
         // Walls and a roof close in over the road; a portal at each end.
-        s32 ea = barrier(pa), eb = barrier(&pts[b]), H = 120;
+        s32 ea = barrier(pa), eb = barrier(&pts[b]), H = 160;
         s32 prev = a ? a - 1 : t->count - 1;
         if (depth < 1150) {
             for (s32 s = -1; s <= 1; s += 2)
@@ -711,7 +787,7 @@ static void draw_segment_faces(s32 a, s32 depth)
         for (s32 end = 0; end < 2; end++) {
             s32 i = end ? b : a;
             if (end ? (pts[b].flags & TF_TUNNEL) : (pts[prev].flags & TF_TUNNEL)) continue;
-            s32 e = barrier(&pts[i]), y = pts[i].y, top = y + H + 90, wide = e + 220;
+            s32 e = barrier(&pts[i]), y = pts[i].y, top = y + H + 110, wide = e + 300;
             face4(EX(i, -wide), top, EZ(i, -wide), EX(i, -e), top, EZ(i, -e),
                   EX(i, -e), y - 10, EZ(i, -e), EX(i, -wide), y - 10, EZ(i, -wide), COLOR(M_SIDEWALK, 1), RF_TWO_SIDED);
             face4(EX(i, e), top, EZ(i, e), EX(i, wide), top, EZ(i, wide),
@@ -748,11 +824,18 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
     const TrackDef *t = g_track;
     const TrackPt *pts = t->pts;
 
-    // Water first: it lies under everything.
+    // Water first: it lies under everything. Only the tiles in reach of the
+    // camera (within ~400 of the focus) are tried.
+    const s32 reach = r_far + 400;
     for (s32 w = 0; w < t->water_count; w++) {
         const s16 *r = &t->water[w * 4];
-        for (s32 z = r[1]; z < r[3]; z += 512)
-            for (s32 x = r[0]; x < r[2]; x += 512) {
+        s32 x0 = r[0], z0 = r[1], xe = r[2], ze = r[3];
+        if (focus_x - reach > x0) x0 += ((focus_x - reach - x0) >> 9) << 9;
+        if (focus_z - reach > z0) z0 += ((focus_z - reach - z0) >> 9) << 9;
+        if (xe > focus_x + reach) xe = focus_x + reach;
+        if (ze > focus_z + reach) ze = focus_z + reach;
+        for (s32 z = z0; z < ze; z += 512)
+            for (s32 x = x0; x < xe; x += 512) {
                 s32 x1 = x + 512 < r[2] ? x + 512 : r[2], z1 = z + 512 < r[3] ? z + 512 : r[3];
                 if (!r_visible((x + x1) / 2, (z + z1) / 2, 400)) continue;
                 ground4(x, 0, z1, x1, 0, z1, x1, 0, z, x, 0, z, COLOR(M_WATER, 0));
@@ -762,9 +845,10 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
     xstamp++;
     r_xform_dir(0, 16384, 0, &xup);
 
-    // Visible stretches of road, drawn far to near.
+    // Visible stretches of road, drawn far to near (the list runs farthest
+    // first; when it is full the farthest gives way).
     s32 n = 0;
-    for (s32 i = 0; i < t->count && n < MAX_VIS; i++) {
+    for (s32 i = 0; i < t->count; i++) {
         if (!(i & (BLOCK_PTS - 1)) && !r_visible(blk_x[i / BLOCK_PTS], blk_z[i / BLOCK_PTS], blk_r[i / BLOCK_PTS])) {
             i += BLOCK_PTS - 1;
             continue;
@@ -774,6 +858,11 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
         s32 radius = p->len / 2 + barrier(p) + p->y * BANK / 2 + 16;
         if (!r_visible(mx, mz, radius)) continue;
         s32 side, d = r_depth(mx, mz, &side);
+        if (n == MAX_VIS) {
+            if (d >= vis_depth[0]) continue;
+            for (s32 k = 1; k < n; k++) { vis_depth[k - 1] = vis_depth[k]; vis_seg[k - 1] = vis_seg[k]; }
+            n--;
+        }
         s32 k = n++;
         while (k > 0 && vis_depth[k - 1] < d) {
             vis_depth[k] = vis_depth[k - 1];
@@ -789,26 +878,24 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
     for (s32 k = n - 1; k >= 0; k--) draw_segment_faces(vis_seg[k], vis_depth[k]);
 
     // Scenery near the camera.
-    const s32 range = (r_far + 600) / 512;
-    s32 cx0 = focus_x / 512 - range, cx1 = focus_x / 512 + range;
-    s32 cz0 = focus_z / 512 - range, cz1 = focus_z / 512 + range;
+    const s32 range = (r_far + 600) >> TRACK_PCELL_SHIFT;
+    s32 cx0 = (focus_x >> TRACK_PCELL_SHIFT) - range, cx1 = (focus_x >> TRACK_PCELL_SHIFT) + range;
+    s32 cz0 = (focus_z >> TRACK_PCELL_SHIFT) - range, cz1 = (focus_z >> TRACK_PCELL_SHIFT) + range;
     if (cx0 < 0) cx0 = 0;
     if (cz0 < 0) cz0 = 0;
-    if (cx1 > 15) cx1 = 15;
-    if (cz1 > 15) cz1 = 15;
+    if (cx1 > TRACK_PGRID - 1) cx1 = TRACK_PGRID - 1;
+    if (cz1 > TRACK_PGRID - 1) cz1 = TRACK_PGRID - 1;
     // Landmarks first so trees and rocks can't use up the face budget on them.
     for (s32 pass = 0; pass < 2; pass++)
     for (s32 cz = cz0; cz <= cz1; cz++)
         for (s32 cx = cx0; cx <= cx1; cx++) {
-            s32 c = cz * 16 + cx;
+            s32 c = cz * TRACK_PGRID + cx;
             s32 first = t->prop_first[c], end = first + t->prop_count[c];
             for (s32 i = first; i < end; i++) {
                 const Prop *p = &t->props[i];
-                s32 big = p->type == P_FERRIS || p->type == P_TEMPLE || p->type == P_STAND ||
-                          p->type == P_BALLOON || p->type == P_LIGHTHOUSE || p->type == P_TOWER ||
-                          p->type == P_COASTER;
+                s32 big = (BIG_PROPS >> p->type) & 1;
                 if (big != !pass) continue;
-                if (!r_visible(p->x, p->z, big ? 300 : 120)) continue;
+                if (!r_visible(p->x, p->z, big ? prop_reach[p->type] : 120)) continue;
                 s32 side, d = r_depth(p->x, p->z, &side);
                 if (!big && d > 760) continue;
                 draw_prop(p, p->y2 * 2, d, frame);
