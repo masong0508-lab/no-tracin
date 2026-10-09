@@ -30,9 +30,6 @@
 #include "sound.h"
 
 s32 car_softbody = 1;
-EWRAM_BSS s32 sb_dbg[16];
-EWRAM_BSS u32 sb_prof[8];
-static inline u32 cyc(void) { return REG_TM0D | (REG_TM1D << 16); }
 
 #define NF       16                 // frame nodes
 #define NB       18                 // ... plus the wing tips
@@ -586,6 +583,164 @@ s32 sb_push(s32 x, s32 y, s32 z, s32 radius, s32 vx, s32 vz, s32 *push_x, s32 *p
     return hit;
 }
 
+// The body's outline for loose objects: they meet these edges, not just the
+// nodes (a cone would slip between the front corners otherwise).
+static const u8 hull[][2] = {
+    { 0, 1 }, { 1, 3 }, { 3, 5 }, { 5, 4 }, { 4, 2 }, { 2, 0 },          // sills
+    { 6, 7 }, { 7, 9 }, { 9, 11 }, { 11, 10 }, { 10, 8 }, { 8, 6 },      // beltline
+    { 0, 6 }, { 1, 7 }, { 4, 10 }, { 5, 11 },                            // corners
+    { 12, 13 }, { 13, 14 }, { 14, 15 }, { 15, 12 },                      // roof
+};
+
+#define HULL_EDGES (sizeof(hull) / 2)
+static s16 ebox[HULL_EDGES][6] EWRAM_BSS;
+static s32 hit_pending, ebox_ok;
+
+// Beams into nodes a and b that a blow has squashed past their yield take
+// that set for good.
+static void set_dent(s32 a, s32 b)
+{
+    for (s32 k = 0; k < nbeams; k++) {
+        Beam *m = &bm[k];
+        if (!m->alive || (m->a != a && m->b != a && m->a != b && m->b != b)) continue;
+        const Node *p = &nd[m->a], *q = &nd[m->b];
+        s32 ex = (q->x - p->x) >> 2, ey = (q->y - p->y) >> 2, ez = (q->z - p->z) >> 2;   // Q6
+        if (iabs(ex) > 16000 || iabs(ey) > 16000 || iabs(ez) > 16000) continue;
+        s32 l = isqrt((u32)(ex * ex + ey * ey + ez * ez));
+        if (l >= m->r - m->yield) continue;
+        s32 nr = l + m->yield;
+        if (nr < (m->r0 * 9) >> 4) nr = (m->r0 * 9) >> 4;
+        dmg += m->r - nr;
+        beam_set(m, nr);
+    }
+}
+
+// The body takes up the knocks from this step's sb_hit_prop calls.
+void sb_hit_done(void)
+{
+    if (hit_pending) apply_rigid();
+    hit_pending = 0;
+    ebox_ok = 0;
+}
+
+s32 sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass)
+{
+    if (!owner) return 0;
+    s32 R = radius << 8;
+    for (s32 k = 0; k < 3; k++)
+        if (iabs(pos[k] - cen[k]) > R + (56 << 8)) return 0;
+    // The deepest touch: an edge of the body, or a wheel.
+    s32 best = 0, bn[3] = { 0, 0, 0 }, bc[3] = { 0, 0, 0 }, ba = -1, bb = -1, bt = 0;
+    u32 best_l2 = (u32)((R >> 4) * (R >> 4));
+    if (!ebox_ok) {
+        // Each hull edge's box in whole units, worked out once a step.
+        for (u32 e = 0; e < HULL_EDGES; e++) {
+            const Node *P = &nd[hull[e][0]], *Q = &nd[hull[e][1]];
+            for (s32 k = 0; k < 3; k++) {
+                s32 a = (&P->x)[k] >> 8, c = (&Q->x)[k] >> 8;
+                ebox[e][k * 2] = a < c ? a : c;
+                ebox[e][k * 2 + 1] = a < c ? c : a;
+            }
+        }
+        ebox_ok = 1;
+    }
+    s32 lo[3], hi[3];
+    // The object is an upright capsule: a ball of radius R swept up and
+    // down `band` from its centre, so its sides push straight out.
+    s32 band = (half_h << 8) - (R >> 1);
+    if (band < 0) band = 0;
+    for (s32 k = 0; k < 3; k++) { lo[k] = (pos[k] >> 8) - radius - 1; hi[k] = (pos[k] >> 8) + radius + 1; }
+    lo[1] -= band >> 8; hi[1] += band >> 8;
+    for (u32 e = 0; e < HULL_EDGES; e++) {
+        // Skip edges whose box (grown by the radius) misses the centre.
+        const s16 *b = ebox[e];
+        if (b[1] < lo[0] || b[0] > hi[0] || b[5] < lo[2] || b[4] > hi[2] || b[3] < lo[1] || b[2] > hi[1]) continue;
+        const Node *P = &nd[hull[e][0]], *Q = &nd[hull[e][1]];
+        s32 dx = (Q->x - P->x) >> 4, dy = (Q->y - P->y) >> 4, dz = (Q->z - P->z) >> 4;      // Q4
+        s32 qx = (pos[0] - P->x) >> 4, qy = (pos[1] - P->y) >> 4, qz = (pos[2] - P->z) >> 4;
+        s32 dd = (dx * dx + dy * dy + dz * dz) >> 8;
+        s32 t = dd ? ((qx * dx + qy * dy + qz * dz) >> 8) * 256 / dd : 0;                   // Q8 along the edge
+        if (t < 0) t = 0; else if (t > 256) t = 256;
+        s32 c[3] = { P->x + ((Q->x - P->x) >> 8) * t, P->y + ((Q->y - P->y) >> 8) * t, P->z + ((Q->z - P->z) >> 8) * t };
+        s32 ay = c[1] < pos[1] - band ? pos[1] - band : c[1] > pos[1] + band ? pos[1] + band : c[1];
+        s32 ex = (pos[0] - c[0]) >> 4, ey = (ay - c[1]) >> 4, ez = (pos[2] - c[2]) >> 4;
+        if (iabs(ex) > R >> 4 || iabs(ey) > R >> 4 || iabs(ez) > R >> 4) continue;
+        u32 l2 = ex * ex + ey * ey + ez * ez;                                                 // Q8
+        if (l2 >= best_l2) continue;
+        best_l2 = l2; ba = hull[e][0]; bb = hull[e][1]; bt = t;
+        bn[0] = ex; bn[1] = ey; bn[2] = ez;
+        for (s32 k = 0; k < 3; k++) bc[k] = c[k];
+    }
+    if (ba >= 0) {
+        // Only the closest edge needs its distance and normal worked out.
+        s32 l = isqrt(best_l2);                                                              // Q4
+        best = R - (l << 4);
+        if (l) { s32 inv = (1 << 24) / l; for (s32 k = 0; k < 3; k++) bn[k] = (bn[k] * inv) >> 10; }
+        else   { bn[0] = 0; bn[1] = 16384; bn[2] = 0; }
+    }
+    for (s32 w = 0; w < 4; w++) {
+        if (!hub_on[w]) continue;
+        const Node *h = &nd[HUB0 + w];
+        s32 ay = h->y < pos[1] - band ? pos[1] - band : h->y > pos[1] + band ? pos[1] + band : h->y;
+        s32 ex = (pos[0] - h->x) >> 4, ey = (ay - h->y) >> 4, ez = (pos[2] - h->z) >> 4;
+        s32 reach = (R + (WHEEL_R << 8)) >> 4;
+        if (iabs(ex) > reach || iabs(ey) > reach || iabs(ez) > reach) continue;
+        s32 l = isqrt((u32)(ex * ex + ey * ey + ez * ez));
+        s32 pen = (reach - l) << 4;
+        if (pen <= best || !l) continue;
+        best = pen; ba = bb = HUB0 + w; bt = 0;
+        bn[0] = (ex << 14) / l; bn[1] = (ey << 14) / l; bn[2] = (ez << 14) / l;
+        for (s32 k = 0; k < 3; k++) bc[k] = (&h->x)[k] + ((bn[k] * WHEEL_R) >> 6);
+    }
+    if (ba < 0) return 0;
+
+    // How fast the body there closes on the object.
+    const Node *A = &nd[ba], *B = &nd[bb];
+    s32 vc[3] = { ((A->x - A->px) * (256 - bt) + (B->x - B->px) * bt) >> 8,
+                  ((A->y - A->py) * (256 - bt) + (B->y - B->py) * bt) >> 8,
+                  ((A->z - A->pz) * (256 - bt) + (B->z - B->pz) * bt) >> 8 };
+    s32 rel[3] = { vc[0] - vel[0], vc[1] - vel[1], vc[2] - vel[2] };
+    s32 vn = dot14(rel, bn);
+    s32 J = 0;
+    if (vn > 0) {
+        if (vn > VMAX) vn = VMAX;
+        s32 w = inv_mass(bc, bn), wp = 65536 / mass;
+        J = ((vn * 5) << 14) / (w + wp);                // a lively bounce
+        for (s32 k = 0; k < 3; k++) vel[k] += (bn[k] * (J / mass)) >> 14;
+        // It's dragged along a little by the body sliding past.
+        s32 vt[3];
+        for (s32 k = 0; k < 3; k++) vt[k] = rel[k] - ((bn[k] * vn) >> 14);
+        for (s32 k = 0; k < 3; k++) vel[k] += vt[k] >> 2;
+        s32 j[3] = { -((bn[0] * J) >> 14), -((bn[1] * J) >> 14), -((bn[2] * J) >> 14) };
+        impulse(j, bc);
+        hit_pending = 1;
+        if (J > 40 * TOTAL_M) stress = 5;
+    }
+    // Apart again: the object takes most of the move, the car the rest (a
+    // heavy one leaves a dent there).
+    s32 dent = (best * mass) / (mass + TOTAL_M);
+    for (s32 k = 0; k < 3; k++) pos[k] += (bn[k] * ((best - dent) >> 8)) >> 6;
+    // A hard hit on something heavy crumples the body there.
+    s32 crush = J / TOTAL_M - 200;
+    if (crush > 0) {
+        crush = crush * mass / 4;
+        dent += crush > (10 << 8) ? 10 << 8 : crush;
+    }
+    s32 crumple = crush > 0 && dent > 64;
+    if (dent > 64) {
+        Node *a = &nd[ba], *b = &nd[bb];
+        for (s32 k = 0; k < 3; k++) {
+            s32 m = (bn[k] * (dent >> 8)) >> 6;
+            s32 ma = (m * (256 - bt)) >> 8, mb = (m * bt) >> 8;
+            (&a->x)[k] -= ma; (&a->px)[k] -= ma;
+            if (b != a) { (&b->x)[k] -= mb; (&b->px)[k] -= mb; }
+        }
+        if (crumple && ba < NF) set_dent(ba, bb);
+        stress = 5;
+    }
+    return J ? J : 1;
+}
+
 // ---------------------------------------------------------------- wheels
 
 static s32 engine_force(s32 v)
@@ -835,7 +990,7 @@ static s32 turned(const s32 *a_now, const s32 *b_prev)
 void sb_step(Car *c, u16 keys)
 {
     // A fresh car, or one moved by something else (respawn, a loaded game).
-    u32 t0 = cyc();
+    ebox_ok = 0;
     if (owner != c) sb_reset(c);
     else if (parked || iabs(c->x - out_x) > (32 << 8) || iabs(c->z - out_z) > (32 << 8)) place(c);
     integrate();
@@ -875,19 +1030,15 @@ void sb_step(Car *c, u16 keys)
     if (c->steer < target)      c->steer = c->steer + 6 > target ? target : c->steer + 6;
     else if (c->steer > target) c->steer = c->steer - 6 < target ? target : c->steer - 6;
 
-    u32 t1 = cyc();
     hub_land = 0;
     s32 contacts = suspension();
-    u32 t2 = cyc();
     tyres(c, keys, vlong);
-    u32 t3 = cyc();
 
     // Air drag, nitro, and the hop cheat.
     s32 speed = isqrt((u32)(mv[0] * mv[0]) + (u32)(mv[1] * mv[1]) + (u32)(mv[2] * mv[2]));
     for (s32 k = 0; k < 3; k++) accv[k] -= RS(mv[k] * speed, 13);
     if (c->boost) for (s32 k = 0; k < 3; k++) accv[k] += RS(ax_f[k] * 22, 6);
     if (cheat_hop && (keys & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && contacts) accv[1] += 900 << 8;
-    sb_dbg[12] = accv[0] >> 8; sb_dbg[13] = accv[2] >> 8; sb_dbg[14] = vlong;
     apply_rigid();
 
 
@@ -930,7 +1081,7 @@ void sb_step(Car *c, u16 keys)
     }
     if (ncon) {
         s32 h = resolve_contacts();
-        if (h > 64) { stress = 5; sb_dbg[10]++; }
+        if (h > 64) stress = 5;
         // Ground knocks count as landings, the rest as wall hits.
         for (s32 c = 0; c < ncon; c++)
             if (cn_n[c][1]) { if (h > land) land = h; } else if (h > hit) hit = h;
@@ -942,12 +1093,10 @@ void sb_step(Car *c, u16 keys)
         wall_node(h, WHEEL_R);
         hub_spin[w] += 40;
     }
-    u32 t4 = cyc();
     // Moving as one piece hardly strains the frame, so one quick pass keeps
     // it true; after a knock it gets the full treatment, and can bend.
-    if (stress) { u32 a = cyc(); solve(2); stress--; sb_dbg[15]++; sb_dbg[0] += cyc() - a; }
-    else if (!(step_n & 7)) { u32 a = cyc(); solve(0); sb_dbg[1]++; sb_dbg[2] += cyc() - a; }
-    u32 t5 = cyc();
+    if (stress) { solve(2); stress--; }
+    else if (!(step_n & 7)) solve(0);
     if (wing_off && (nd[16].y < nd[16].py || nd[17].y < nd[17].py)) {
         ground_node(&nd[16], NODE_R, 1);
         ground_node(&nd[17], NODE_R, 1);
@@ -959,9 +1108,6 @@ void sb_step(Car *c, u16 keys)
         if (!alive) { wing_off = 1; game_message("WING OFF!", "", PAL_RED, 90); }
     }
 
-    u32 t6 = cyc();
-    sb_prof[0] += t1 - t0; sb_prof[1] += t2 - t1; sb_prof[2] += t3 - t2; sb_prof[3] += t4 - t3;
-    sb_prof[4] += t5 - t4; sb_prof[5] += t6 - t5; sb_prof[6]++;
     // ---- results for the rest of the game
     frame();
     // A frame knocked inside out can't be simulated: stand a fresh one up.
@@ -1112,7 +1258,6 @@ static void bind(const Mesh *m)
 void sb_draw(const Car *c, const Mesh *body)
 {
     if (owner != c) return;
-    u32 t0 = cyc();
     if (!sk_ready) bind(body);
     // A wing lying on the road keeps its own axes.
     s32 wr[3], wu[3] = { 0, 16384, 0 }, wf[3];
@@ -1156,5 +1301,4 @@ void sb_draw(const Car *c, const Mesh *body)
         }
         r_box_mat(h->x >> 8, h->y >> 8, h->z >> 8, m, -4, -7, -7, 4, 6, 7, M_TIRE);
     }
-    sb_prof[7] += cyc() - t0;
 }

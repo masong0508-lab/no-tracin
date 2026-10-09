@@ -20,6 +20,13 @@ void sb_draw(const Car *c, const Mesh *body);   // the deformed body and its whe
 // speed in Q8 (0 if it didn't touch); *push gets the sideways shove it took.
 s32  sb_push(s32 x, s32 y, s32 z, s32 radius, s32 vx, s32 vz, s32 *push_x, s32 *push_z);
 
+// A loose object (an upright capsule of radius r and half height h in world
+// units, weighing m nodes, with its centre and velocity in Q8) against the
+// car's body: both take the knock, the object is put back outside, and a
+// heavy one dents the car. Returns the impulse it took (0 if it didn't touch).
+s32  sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass);
+void sb_hit_done(void);                // call after a round of sb_hit_prop
+
 s32  sb_damage(void);                  // 0..100 percent
 s32  sb_wheels_off(void);              // wheels torn off
 

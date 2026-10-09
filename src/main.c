@@ -11,6 +11,8 @@
 #include "menu.h"
 #include "track.h"
 #include "race.h"
+#include "props.h"
+#include "softbody.h"
 
 #define STEP_CYCLES 280896   // one 60 Hz physics step in CPU cycles
 #define OBJ_ON      0x1000
@@ -278,7 +280,7 @@ static s32 mode_select(s32 *t, s32 *sel)
     };
     static const char *const about[MODE_COUNT][2] = {
         { "RACE 7 CARS", "BEAT THE CLOCK" }, { "PRACTICE LAPS", "NO TIME LIMIT" },
-        { "FREE ROAM", "STUNTS + LOOP" }, { "STUNT CITY", "SAVE SLOTS" },
+        { "OPEN WORLD", "CRASH AND SMASH" }, { "STUNT CITY", "SAVE SLOTS" },
         { "GAME SETUP", "" }, { "STUNT RECORDS", "" },
     };
     u16 prev = ~REG_KEYINPUT;
@@ -403,6 +405,14 @@ static void draw_hud(const Car *car, const Camera *cam, s32 view, s32 label_time
         p = put(p, "/");
         put_num(p, STAR_COUNT);
         hud_text(4, 41, buf, 0, PAL_YELLOW);
+        if (sb_valid(car)) {
+            // How bent the soft-body car is.
+            s32 d = sb_damage();
+            p = put(buf, "DMG ");
+            p = put_num(p, d);
+            put(p, "%");
+            hud_text(4, 51, buf, 0, d < 25 ? PAL_WHITE : d < 60 ? PAL_YELLOW : PAL_RED);
+        }
     }
 
     // Score, combo and lap.
@@ -473,7 +483,7 @@ static s32 pause_menu(Car *car, CamState *cs)
     for (;;) {
         s32 i = menu_list("PAUSED", items, 8);
         if (i <= 0) return 0;
-        if (i == 1) { car_respawn(car); cs->ready = 0; return 0; }
+        if (i == 1) { car_respawn(car); props_reset(); cs->ready = 0; return 0; }
         if (i == 2) menu_options();
         if (i == 3) {
             s32 slot = menu_slot("SAVE GAME", 1);
@@ -532,6 +542,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
     fx_reset();
     if (track >= 0) race_begin(track, race_mode, car);
     else car_reset(car, the_loop.x, PARK_Z0 + 36, 0);
+    props_reset();
     s32 countdown = 180;
     if (track < 0 && load_from >= 0) {
         s32 score;
@@ -596,6 +607,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
             } else {
                 car_step(car, keys);
             }
+            props_step(car);
             fx_step(car);
             sound_step(car);
             game_step(car);
@@ -624,6 +636,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
             world_draw(car->x >> 8, car->z >> 8);
             fx_draw_ground();
             game_draw_world();
+            props_draw();
             Car ghost;
             if (!g_opt[OPT_GHOST] && game_ghost(&ghost)) car_draw(&ghost, 1);
         }
