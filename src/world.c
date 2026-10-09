@@ -8,7 +8,8 @@ extern volatile u32 g_frames;
 #define MAX_SOLIDS   2400
 #define MAX_FEATURES 160     // feat_refs holds feature numbers as bytes
 
-typedef struct { s16 x0, z0, x1, z1, h; u8 material; } Solid;
+// base: where it starts above the ground, in 4-unit steps (a tower on a podium).
+typedef struct { s16 x0, z0, x1, z1, h; u8 material, base; } Solid;
 
 // F_RAMP: rectangle x0..x1 / z0..z1 whose height runs linearly from h0 at
 //         the low end to h1 at the high end of its axis (0 = z, 1 = x).
@@ -57,11 +58,20 @@ static u32 hash(u32 x)
     return x;
 }
 
-static void add_solid(s32 x0, s32 z0, s32 x1, s32 z1, s32 h, s32 material)
+static Solid *add_solid(s32 x0, s32 z0, s32 x1, s32 z1, s32 h, s32 material)
 {
-    if (solid_count >= MAX_SOLIDS) { world_overflow++; return; }
+    if (solid_count >= MAX_SOLIDS) { world_overflow++; return 0; }
     Solid *s = &solids[solid_count++];
-    s->x0 = x0; s->z0 = z0; s->x1 = x1; s->z1 = z1; s->h = h; s->material = material;
+    s->x0 = x0; s->z0 = z0; s->x1 = x1; s->z1 = z1; s->h = h; s->material = material; s->base = 0;
+    return s;
+}
+
+// A box standing on another one, from y0 (a multiple of 4) up to h. Walls
+// only stop the car at ground level, so it doesn't collide.
+static void add_upper(s32 x0, s32 z0, s32 x1, s32 z1, s32 y0, s32 h, s32 material)
+{
+    Solid *s = add_solid(x0, z0, x1, z1, h, material);
+    if (s) s->base = y0 >> 2;
 }
 
 static void add_feature(s32 type, s32 axis, s32 x0, s32 z0, s32 x1, s32 z1, s32 h0, s32 h1)
@@ -73,13 +83,14 @@ static void add_feature(s32 type, s32 axis, s32 x0, s32 z0, s32 x1, s32 z1, s32 
 }
 
 // What stands on each lot: a plaza of trees, a tower with low wings, a
-// quarter of four buildings, nine low ones in rows, or three buildings and
-// a little square. Parcels are split by alleys so no wall gets wider than
-// a lot quarter (long faces sort badly against things in front of them).
-enum { LOT_PLAZA, LOT_TOWER, LOT_QUAD, LOT_ROWS, LOT_MIXED };
+// tower on a podium, a quarter of four buildings, nine low ones in rows, or
+// three buildings and a little square. Parcels are split by alleys so no
+// wall gets much wider than a lot quarter (long faces sort badly against
+// things in front of them).
+enum { LOT_PLAZA, LOT_TOWER, LOT_PODIUM, LOT_QUAD, LOT_ROWS, LOT_MIXED };
 static const u8 lot_kinds[16] = {
-    LOT_PLAZA, LOT_PLAZA, LOT_TOWER, LOT_TOWER, LOT_TOWER, LOT_QUAD, LOT_QUAD, LOT_QUAD,
-    LOT_QUAD, LOT_ROWS, LOT_ROWS, LOT_ROWS, LOT_ROWS, LOT_MIXED, LOT_MIXED, LOT_MIXED,
+    LOT_PLAZA, LOT_PLAZA, LOT_TOWER, LOT_TOWER, LOT_PODIUM, LOT_PODIUM, LOT_QUAD, LOT_QUAD,
+    LOT_QUAD, LOT_QUAD, LOT_ROWS, LOT_ROWS, LOT_ROWS, LOT_MIXED, LOT_MIXED, LOT_MIXED,
 };
 #define KIND_PARK 255
 
@@ -121,6 +132,16 @@ static void build_lot(s32 kind, u32 r, s32 x0, s32 z0)
             tree(x1 - m / 2, z0 + m / 2, r >> 3);
             tree(x0 + m / 2, z1 - m / 2, r >> 5);
         }
+        break;
+    }
+    case LOT_PODIUM: {
+        // A tower standing on a podium, trees on the corners of the lot.
+        const s32 m = (LOT - 448) / 2, t = (LOT - 256) / 2;
+        s32 hp = 56 + ((r >> 24) & 7) * 4;
+        add_solid(x0 + m, z0 + m, x1 - m, z1 - m, hp, M_BLD0 + (r >> 20) % 6);
+        add_upper(x0 + t, z0 + t, x1 - t, z1 - t, hp, MAX_BUILDING_H - 160 + (r >> 12) % 161, M_BLD0 + (r >> 8) % 6);
+        for (s32 i = 0; i < 4; i++)
+            tree(i & 1 ? x1 - m / 2 : x0 + m / 2, i & 2 ? z1 - m / 2 : z0 + m / 2, r >> (3 + i));
         break;
     }
     case LOT_ROWS:
@@ -394,6 +415,7 @@ s32 world_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
         s32 first = block_first[bz][bx], end = first + block_count[bz][bx];
         for (s32 i = first; i < end; i++) {
             const Solid *s = &solids[i];
+            if (s->base) continue;
             s32 cx = x < s->x0 ? s->x0 : x > s->x1 ? s->x1 : x;
             s32 cz = z < s->z0 ? s->z0 : z > s->z1 ? s->z1 : z;
             s32 dx = x - cx, dz = z - cz;
@@ -665,13 +687,14 @@ IWRAM_CODE static void draw_block_ground(s32 bx, s32 bz)
 }
 
 // Road markings near the car on the street along x = line (along z when
-// `across` is set): a double centre line and dashed lines between the
-// lanes, painted only between the crossings.
+// `across` is set): a double centre line, dashed lines between the lanes
+// and a stop line across each carriageway before the next crossing,
+// painted only between the crossings.
 #define PAINT_REACH 520
 #define PAINT_EDGE  (ROAD_HALF + 24)          // paint stops this far from a crossing's centre
-#define DASH        64
-#define DASH_PERIOD 192
-#define DASH_SKIP   ((BLOCK - 2 * PAINT_EDGE - 3 * DASH_PERIOD - DASH) / 2)   // centres 4 dashes per segment
+#define DASH        60                     // 3 m dashes, 9 m gaps
+#define DASH_PERIOD 240
+#define DASH_SKIP   ((BLOCK - 2 * PAINT_EDGE - 2 * DASH_PERIOD - DASH) / 2)   // centres 3 dashes per segment
 
 static void paint_rect(s32 a0, s32 c0, s32 a1, s32 c1, s32 across, u8 color)
 {
@@ -693,6 +716,14 @@ static __attribute__((noinline)) void paint_street(s32 line, s32 focus, s32 acro
         if (across ? park_contains(mid, line, ROAD_HALF) : park_contains(line, mid, ROAD_HALF)) continue;
         paint_rect(s0, line - 8, s1, line - 3, across, yellow);
         paint_rect(s0, line + 3, s1, line + 8, across, yellow);
+        // Traffic keeps right: heading +z that is the +x side, heading +x the -z side.
+        if (across) {
+            paint_rect(s1 - 12, line - ROAD_HALF, s1, line - 10, across, white);
+            paint_rect(s0, line + 10, s0 + 12, line + ROAD_HALF, across, white);
+        } else {
+            paint_rect(s1 - 12, line + 10, s1, line + ROAD_HALF, across, white);
+            paint_rect(s0, line - ROAD_HALF, s0 + 12, line - 10, across, white);
+        }
         for (s32 a = s0 + DASH_SKIP; a + DASH <= s1; a += DASH_PERIOD) {
             if (a + DASH < focus - PAINT_REACH || a > focus + PAINT_REACH) continue;
             paint_rect(a, line - LANE - 3, a + DASH, line - LANE + 3, across, white);
@@ -781,7 +812,7 @@ IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
             const Solid *s = &solids[i];
             if (!visible((s->x0 + s->x1) / 2, (s->z0 + s->z1) / 2,
                          (s->x1 - s->x0 + s->z1 - s->z0) / 2)) continue;
-            r_box(s->x0, 0, s->z0, s->x1, s->h, s->z1, s->material);
+            r_box(s->x0, s->base << 2, s->z0, s->x1, s->h, s->z1, s->material);
         }
     }
 }
