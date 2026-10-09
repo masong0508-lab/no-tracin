@@ -39,6 +39,12 @@ reset:
     strlt   r3, [r1], #4
     blt     2b
 
+    ldr     r1, =__ewram_start  @ zero the EWRAM arrays too
+    ldr     r2, =__ewram_end
+3:  cmp     r1, r2
+    strlt   r3, [r1], #4
+    blt     3b
+
     ldr     r0, =main
     bx      r0
     .pool

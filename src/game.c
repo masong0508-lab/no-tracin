@@ -3,6 +3,7 @@
 #include "world.h"
 #include "sound.h"
 #include "hud.h"
+#include "track.h"
 
 Game g_game;
 Records g_rec;
@@ -173,11 +174,12 @@ typedef struct {
 } Gate;
 
 // Start line, loop exit, top of the banked curve, after the canal jump.
+#define LANE_B_MID ((LANE_B_X0 + LANE_B_X1) / 2)
 static const Gate gates[4] = {
-    { 768, 647, 0, 872, 647, 0,       820, 690, 0 },
-    { 864, 1640, 0, 976, 1640, 0,     920, 1660, 0 },
-    { 1250, 2470, 100, 1250, 2290, 0, 920, 1660, 0 },
-    { 1690, 880, 0, 1490, 880, 0,     1590, 850, 32768 },
+    { LOOP_X - 52, START_Z, 0, LOOP_X + 52, START_Z, 0,     LOOP_X, START_Z + 43, 0 },
+    { LOOP_X + 44, LOOP_Z + 90, 0, LOOP_X + 156, LOOP_Z + 90, 0,   LOOP_X + 100, LOOP_Z + 110, 0 },
+    { BANK_X, BANK_Z + BANK_ROUT, BANK_H, BANK_X, BANK_Z + BANK_RIN, 0,   LOOP_X + 100, LOOP_Z + 110, 0 },
+    { LANE_B_X1, LANDING_Z0 - 40, 0, LANE_B_X0, LANDING_Z0 - 40, 0,   LANE_B_MID, LANDING_Z0 - 70, 32768 },
 };
 
 #define GHOST_MAX 2400      // samples, one per two steps: 80 s
@@ -204,11 +206,6 @@ static void set_spawn(Car *c, s32 gate)
     c->safe_heading = gates[gate].heading;
 }
 
-static s32 in_park_area(s32 x, s32 z, s32 margin)
-{
-    return x > PARK_X0 - margin && x < PARK_X1 + margin && z > PARK_Z0 - margin && z < PARK_Z1 + margin;
-}
-
 static void start_lap(void)
 {
     g_game.cp_flash = 0;
@@ -224,7 +221,7 @@ static void lap(Car *c)
     s32 x = c->x >> 8, z = c->z >> 8;
     s32 dx = x - prev_x, dz = z - prev_z;
     s32 jumped = dx > 100 || dx < -100 || dz > 100 || dz < -100;   // respawned
-    s32 in_park = in_park_area(x, z, 300);
+    s32 in_park = park_contains(x, z, 300);
 
     if (g->lap_active) {
         g->lap_steps++;
@@ -283,19 +280,24 @@ static void lap(Car *c)
 
 // ---------------------------------------------------------------- stars
 
-// Hidden around the city on the streets, plus a few you only reach in the air.
+// Hidden around the city on the streets, plus a few you only reach in the
+// air. XS(k, b, l) lies on the street x = k blocks, half way along block b,
+// in lane l (-2..1, west to east); ZS the same on the street z = k blocks.
+#define XS(k, b, l) { (k) * BLOCK + (l) * LANE + LANE / 2, (b) * BLOCK + BLOCK / 2, -1 }
+#define ZS(k, b, l) { (b) * BLOCK + BLOCK / 2, (k) * BLOCK + (l) * LANE + LANE / 2, -1 }
 static const s16 star_pos[STAR_COUNT][3] = {
-    { 2560, 1280, -1 }, { 3072, 3328, -1 }, { 4096, 768, -1 }, { 5376, 2048, -1 },
-    { 6144, 4352, -1 }, { 7168, 1792, -1 }, { 1280, 6144, -1 }, { 2304, 7168, -1 },
-    { 3584, 5632, -1 }, { 4864, 3072, -1 }, { 5632, 6400, -1 }, { 6912, 6656, -1 },
-    { 7680, 3840, -1 }, { 512, 3840, -1 }, { 4608, 7424, -1 }, { 2816, 4608, -1 },
-    { 7424, 512, -1 }, { 6656, 2816, -1 },
-    { 1590, 1320, 95 },     // over the canal
-    { 1430, 780, 70 },      // off the practice kicker
-    { 1250, 2380, 120 },    // above the banked curve
-    { 4096, 4096, 260 },    // high over the middle of town: a flying star
+    XS(3, 6, 0), XS(5, 2, -1), XS(7, 9, 1), XS(9, 4, -2), XS(11, 13, 0), XS(13, 7, -1),
+    XS(15, 16, 1), XS(17, 3, -2), XS(4, 15, 0), XS(8, 18, -1), XS(12, 1, 1), XS(16, 11, -2),
+    XS(18, 14, 0),
+    ZS(5, 6, -1), ZS(8, 12, 1), ZS(10, 3, -2), ZS(12, 15, 0), ZS(14, 9, -1), ZS(17, 5, 1),
+    ZS(2, 10, -2), ZS(6, 17, 0), ZS(15, 13, -1), ZS(19, 8, 1), ZS(11, 7, -2), ZS(7, 3, 0),
+    { 7 * BLOCK, 11 * BLOCK, -1 },                      // in the middle of a crossing
+    { LANE_B_MID, CANAL_Z0 + 150, 95 },                 // over the canal
+    { PX(1030), START_Z + 133, 70 },                    // off the practice kicker
+    { BANK_X, BANK_Z + 340, 120 },                      // above the banked curve
+    { WORLD / 2, WORLD / 2, 260 },                      // high over the middle of town: a flying star
 };
-static s16 star_y[STAR_COUNT];
+static s16 star_y[STAR_COUNT] EWRAM_BSS;   // worked out on first use (EWRAM is zeroed at boot)
 
 static s32 star_height(s32 i)
 {
@@ -345,7 +347,7 @@ void game_draw_stars(s32 frame)
     for (s32 i = 0; i < STAR_COUNT; i++) {
         if ((g_rec.stars >> i) & 1) continue;
         s32 side, d = r_depth(star_pos[i][0], star_pos[i][1], &side);
-        if (d < 30 || d > 1100) continue;
+        if (d < 30 || d > r_far) continue;
         s32 bob = (isin(frame * 12 + i * 90) * 4) >> 14;
         s32 sx, sy;
         if (!r_project(star_pos[i][0], star_height(i) + bob, star_pos[i][1], &sx, &sy)) continue;
@@ -373,6 +375,17 @@ void game_step(Car *c)
 {
     Game *g = &g_game;
     if (g->msg_timer > 0) g->msg_timer--;
+    if (g_track) {
+        // On a circuit the race keeps score; stunts just count for the records.
+        c->event = 0;
+        if (c->boost && !cheat_nitro) g->nitro -= 6;
+        if (g->nitro < 0) g->nitro = 0;
+        if (cheat_nitro) g->nitro = NITRO_MAX;
+        s32 mph = (car_speed(c) * 67) / 2560;
+        if (c->mode != CAR_CRASH && mph > g_rec.top_mph) g_rec.top_mph = mph;
+        if (++play_steps >= 60) { play_steps = 0; g_rec.play_secs++; }
+        return;
+    }
     if (g->combo_timer > 0 && --g->combo_timer == 0) g->combo = 0;
     drift(c);
     stunt_events(c);

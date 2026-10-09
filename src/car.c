@@ -6,17 +6,20 @@
 // (arcade-heavy so jumps land inside the city).
 #include "car.h"
 #include "world.h"
+#include "track.h"
+#include "softbody.h"
+#include "tune.h"
 
 #define G           car_g     // gravity, Q8 units per step^2 (35 = 2.5 g)
 #define GRIP        car_grip  // max sideways velocity change per step (38 = ~1.1 g)
-#define HAND_GRIP   12      // rear grip with the handbrake on
-#define A0          16      // full-throttle acceleration at low speed
+#define HAND_GRIP   tn.hand_grip  // rear grip with the handbrake on (12)
+#define A0          tn.a0     // full-throttle acceleration at low speed (16)
 #define POWER       car_power // engine power: accel = POWER / speed above A0
-#define BRAKE       31
+#define BRAKE       tn.brake  // 31
 #define REV_ACC     10
 #define REV_MAX     (-1024)
-#define CRASH_WALL  1700    // sideways-into-wall speed that wrecks the car (~45 mph)
-#define CRASH_LAND  1800    // landing impact that wrecks the car
+#define CRASH_WALL  tn.crash_wall   // sideways-into-wall speed that wrecks the car (1700, ~45 mph)
+#define CRASH_LAND  tn.crash_land   // landing impact that wrecks the car (1800)
 #define CAR_R       28      // collision radius
 #define STEP_UP     (10 << 8)
 #define LOOP_ALIGN  4551    // must enter the loop within 25 degrees of straight
@@ -31,9 +34,13 @@ static s32 iabs(s32 v) { return v < 0 ? -v : v; }
 // Body angles are Q8 of 1024-unit turns; this folds one into -half..half a turn.
 static s32 wrap_angle(s32 a) { return (s32)((u32)a << 14) >> 14; }
 
+// Speed for the air drag, held where its square still fits (with the lab's
+// least drag the nitro can run away with the car).
+static s32 drag_v(s32 v) { v = iabs(v); return v > 30000 ? 30000 : v; }
+
 static s32 engine_force(s32 v)
 {
-    if (v < POWER / A0) return A0;
+    if (v < tn.v0 || v <= 0) return A0;     // v0 = POWER / A0
     return POWER / v;
 }
 
@@ -55,6 +62,7 @@ static s32 slope(s32 here, s32 ahead, s32 behind)
 
 static void gradient(s32 ux, s32 uz, s32 base, s32 *gx, s32 *gz)
 {
+    if (g_track) { track_gradient(ux, uz, gx, gz); return; }
     s32 here = surf(ux, uz, base);
     *gx = slope(here, surf(ux + 8, uz, base), surf(ux - 8, uz, base));
     *gz = slope(here, surf(ux, uz + 8, base), surf(ux, uz - 8, base));
@@ -62,8 +70,8 @@ static void gradient(s32 ux, s32 uz, s32 base, s32 *gx, s32 *gz)
 
 static void spring(s32 *a, s32 *v, s32 target)
 {
-    *v += (target - *a) >> 3;
-    *v -= *v >> 2;
+    *v += ((target - *a) * tn.spring) >> 11;
+    *v -= (*v * tn.damp) >> 10;
     *a += *v;
 }
 
@@ -79,6 +87,7 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
     c->safe_x = x;
     c->safe_z = z;
     c->safe_heading = heading;
+    sb_invalidate();
 }
 
 void car_respawn(Car *c)
@@ -130,11 +139,13 @@ static void collide(Car *c, s32 *nx, s32 *nz, s32 can_crash)
         c->roll_v += vn * 8;
         return;
     }
+    s32 most = vn * 2;              // never thrown back faster than it hit
     if (can_crash && car_crashes && -vn > CRASH_WALL) {
         crash(c, EV_CRASH);
         vn = (vn * 3) / 2;
     }
-    s32 kick = (vn * 13) / 10;     // restitution 0.3
+    s32 kick = (vn * tn.bounce) / 100;   // restitution 0.3 at 130
+    if (kick < most) kick = most;
     c->vx -= (kick * n_x) >> 14;
     c->vz -= (kick * n_z) >> 14;
     c->vx -= c->vx >> 4;            // scraping slows the car
@@ -160,6 +171,14 @@ static void enter_loop(Car *c, s32 vlong)
     c->loop_v = vlong;
     c->heading = 0;
     c->steer = 0;
+}
+
+// Crossing the loop's entry line, lined up and moving forward.
+static s32 at_loop(const Car *c, s32 z0, s32 nx, s32 nz, s32 vlong)
+{
+    const Loop *l = &the_loop;
+    return !g_track && (z0 >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
+           iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256;
 }
 
 static void ground_step(Car *c, u16 keys)
@@ -190,14 +209,32 @@ static void ground_step(Car *c, u16 keys)
     else if (vlong < 0)
         engine = vlong < -3 ? 3 : -vlong;
     along += engine;
-    if (c->boost) along += 22;              // nitro
-    along -= (vlong * iabs(vlong)) >> 21;   // air drag
-    along -= vlong >> 10;                   // rolling resistance
+    if (c->boost) along += tn.nitro;        // nitro
+    along -= (((vlong * drag_v(vlong)) >> 13) * tn.drag) >> 16;   // air drag
+    along -= (vlong * tn.drag_lin) >> 18;   // rolling resistance
+    if (g_track && world_surface(ux, uz) == SURF_GRASS)
+        along -= vlong >> 6;                // grass off the circuit slows you right down
     vlong += along;
 
     // Tyres cancel sideways motion up to their grip; beyond that the car slides.
+    // Grip shrinks when the tyres are also braking or driving hard (so trail
+    // braking or flooring it mid-corner can break traction), on grass, and when
+    // the car goes light over a crest.
     s32 hand = keys & KEY_L;
     s32 grip = hand ? HAND_GRIP : GRIP;
+    s32 lon = iabs(engine) + (c->boost ? 8 : 0);
+    if (!hand) grip -= lon / 3;
+    if (world_surface(ux, uz) == SURF_GRASS) grip = (grip * 5) >> 3;
+    if (c->load == 0) c->load = 256;
+    s32 tload = c->load;
+    if (tn.downforce) {
+        // Downforce (or lift) builds with the square of the speed.
+        s32 v4 = iabs(vlong) >> 4;
+        tload += (v4 * v4 * tn.downforce) >> 16;
+        tload = tload < 32 ? 32 : tload > 1024 ? 1024 : tload;
+    }
+    grip = (grip * tload) >> 8;
+    if (grip < tn.grip_min) grip = tn.grip_min;
     vlat += alat;
     c->skid = 0;
     if (vlat > grip)       { vlat -= grip; c->skid = 1; }
@@ -209,13 +246,20 @@ static void ground_step(Car *c, u16 keys)
     // Steering: less lock at speed, yaw from the bicycle model.
     s32 sp = iabs(vlong);
     if (sp > 3584) sp = 3584;
-    s32 lock = 60 - (sp * 44) / 3584;
-    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0;
-    if (c->steer < target)      c->steer = c->steer + 6 > target ? target : c->steer + 6;
-    else if (c->steer > target) c->steer = c->steer - 6 < target ? target : c->steer - 6;
+    s32 lock = ((60 - (sp * 44) / 3584) * tn.steer) >> 8;
+    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0, rate = tn.steer_rate;
+    if (c->steer < target)      c->steer = c->steer + rate > target ? target : c->steer + rate;
+    else if (c->steer > target) c->steer = c->steer - rate < target ? target : c->steer - rate;
     s32 yaw = (vlong * c->steer) >> 8;
     if (c->skid && !hand) yaw = (yaw * 3) >> 2;     // front tyres sliding: understeer
     if (hand && sp > 768)  yaw = (yaw * 3) >> 1;     // handbrake: the tail steps out
+    // Weight transfer: braking loads the nose so it bites and the tail goes
+    // light; power squats the rear and pushes the nose wide.
+    if (engine < 0 && vlong > 512)       yaw = (yaw * 5) >> 2;
+    else if (engine > 8 && vlong > 256)  yaw = (yaw * 7) >> 3;
+    // The body has inertia, so it takes a moment to turn in and to settle.
+    c->yaw_v += (yaw - c->yaw_v) >> 1;
+    yaw = c->yaw_v;
     s32 align = vlat / 4;                            // a sliding car swings toward its path
     yaw += align > 200 ? 200 : align < -200 ? -200 : align;
     c->heading += yaw;
@@ -227,7 +271,7 @@ static void ground_step(Car *c, u16 keys)
     s32 sf = (gx * fx + gz * fz) >> 14, sr = (gx * fz - gz * fx) >> 14;
     s32 a_lat = (vlong * yaw) / 10430;
     spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) << 8) + engine * 48);
-    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * 64);
+    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * tn.lean);
 
     // Move, then resolve walls.
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
@@ -262,9 +306,7 @@ static void ground_step(Car *c, u16 keys)
     }
 
     // The loop: crossing its entry line lined up and moving forward.
-    const Loop *l = &the_loop;
-    if ((c->z >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
-        iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256) {
+    if (at_loop(c, c->z, nx, nz, vlong)) {
         c->x = nx; c->z = nz;
         enter_loop(c, vlong);
         return;
@@ -275,6 +317,7 @@ static void ground_step(Car *c, u16 keys)
     s32 ballistic = c->y + c->vy - G;
     if (hnew < ballistic - 512) {
         c->vy -= G;
+        if (c->vy > 0) c->vy = (c->vy * tn.jump) >> 8;   // launch speed off the lip
         c->y = ballistic;
         take_off(c);
     } else {
@@ -283,6 +326,10 @@ static void ground_step(Car *c, u16 keys)
         s32 vy = hnew - c->y;
         s32 vmax = (isqrt(c->vx * c->vx + c->vz * c->vz) * 5) / 8 + 64;
         if (vy > vmax) vy = vmax;
+        // Road curving away (crest) unloads the tyres, a dip loads them.
+        s32 load = 256 + ((vy - c->vy) * 256) / (G > 0 ? G : 1);
+        load = load < 96 ? 96 : load > 352 ? 352 : load;
+        c->load += (load - c->load) >> 2;
         c->bob_v -= (vy - c->vy) >> 2;
         c->vy = vy;
         c->y = hnew;
@@ -295,8 +342,8 @@ static void ground_step(Car *c, u16 keys)
         c->safe_timer = 0;
         s32 sx = nx >> 8, sz = nz >> 8;
         // In the Stunt Park the lap logic picks the restart point.
-        s32 in_park = sx > PARK_X0 && sx < PARK_X1 && sz > PARK_Z0 && sz < PARK_Z1;
-        if (!in_park && c->mode == CAR_GROUND && hnew == 0 && gx == 0 && gz == 0 &&
+        s32 in_park = park_contains(sx, sz, 0);
+        if (!g_track && !in_park && c->mode == CAR_GROUND && hnew == 0 && gx == 0 && gz == 0 &&
             !world_in_water(sx, sz)) {
             c->safe_x = sx;
             c->safe_z = sz;
@@ -318,7 +365,7 @@ static void fly(Car *c, u16 keys)
     c->roll += ((lr * (90 << 8)) - c->roll) / 8;
     if (keys & KEY_A) c->fly_v += 24;
     if (keys & KEY_B) c->fly_v -= 40;
-    if (c->boost) c->fly_v += 40;
+    if (c->boost) c->fly_v += tn.nitro_fly;
     c->fly_v -= c->fly_v >> 7;
     if (c->fly_v < 300) c->fly_v = 300;
     s32 h = c->heading >> 6, p = c->pitch >> 8;
@@ -336,12 +383,12 @@ static void air_step(Car *c, u16 keys)
         goto move;
     }
     c->vy -= G;
-    c->vx -= c->vx >> 9;
-    c->vz -= c->vz >> 9;
+    c->vx -= (c->vx * tn.drag_lin) >> 17;
+    c->vz -= (c->vz * tn.drag_lin) >> 17;
     if (c->boost) {
         s32 h0 = c->heading >> 6;
-        c->vx += isin(h0) >> 11;
-        c->vz += icos(h0) >> 11;
+        c->vx += (isin(h0) * tn.nitro_air) >> 19;
+        c->vz += (icos(h0) * tn.nitro_air) >> 19;
     }
 
     // Tricks: up/down flip, L + left/right barrel roll, B + left/right spin.
@@ -349,10 +396,10 @@ static void air_step(Car *c, u16 keys)
     s32 lr = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0;
     s32 ud = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
     s32 roll_in = (keys & KEY_L) ? lr : 0, spin_in = (keys & KEY_B) ? lr : 0;
-    if (!roll_in && !spin_in) c->heading += lr * 40;
-    c->air_pv += (ud * 4800 - c->air_pv) / 6;
-    c->air_rv += (roll_in * 5200 - c->air_rv) / 6;
-    c->air_hv += (spin_in * 1150 - c->air_hv) / 6;
+    if (!roll_in && !spin_in) c->heading += lr * tn.air_steer;
+    c->air_pv += (ud * tn.air_p - c->air_pv) / 6;
+    c->air_rv += (roll_in * tn.air_r - c->air_rv) / 6;
+    c->air_hv += (spin_in * tn.air_h - c->air_hv) / 6;
     c->pitch += c->air_pv;  c->trick_p += c->air_pv;
     c->roll += c->air_rv;   c->trick_r += c->air_rv;
     c->heading += c->air_hv; c->trick_h += c->air_hv;
@@ -360,7 +407,7 @@ static void air_step(Car *c, u16 keys)
 move:;
 
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
-    if (c->y < (400 << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
+    if (c->y < ((g_track ? 400 : MAX_BUILDING_H) << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
     c->x = nx; c->z = nz;
     c->y += c->vy;
     if (c->mode == CAR_CRASH) return;
@@ -434,7 +481,7 @@ static void loop_step(Car *c, u16 keys)
     s32 a = -((G * isin(theta)) >> 14);      // gravity along the track
     if (keys & KEY_A)      a += engine_force(v);
     else if (keys & KEY_B) a -= v > 0 ? BRAKE : 0;
-    a -= (v * iabs(v)) >> 21;
+    a -= (((v * drag_v(v)) >> 13) * tn.drag) >> 16;
     v += a;
     c->loop_s += v;
     c->loop_v = v;
@@ -562,6 +609,21 @@ void car_step(Car *c, u16 keys)
 {
     c->hit = 0;
     c->landed = 0;
+    // Soft-body physics drives the car on the ground and in the air; the loop
+    // ride, sinking wrecks and the fly cheat stay on the arcade model.
+    if (car_softbody && !cheat_fly && (c->mode == CAR_GROUND || c->mode == CAR_AIR)) {
+        s32 z0 = c->z;
+        sb_step(c, keys);
+        s32 h = c->heading >> 6;
+        s32 vlong = (c->vx * isin(h) + c->vz * icos(h)) >> 14;
+        if (c->mode == CAR_GROUND && at_loop(c, z0, c->x, c->z, vlong)) {
+            enter_loop(c, vlong);
+            sb_park();
+        }
+        gearbox(c, keys);
+        return;
+    }
+    sb_park();
     switch (c->mode) {
     case CAR_GROUND: ground_step(c, keys); break;
     case CAR_AIR:    air_step(c, keys);    break;
@@ -569,15 +631,16 @@ void car_step(Car *c, u16 keys)
     default:         crash_step(c);        break;
     }
     // Flying cheats can leave the map; keep the car over it.
+    s32 ext = g_track ? TRACK_WORLD : WORLD;
     if (c->x < (16 << 8)) { c->x = 16 << 8; c->vx = -c->vx / 2; }
     if (c->z < (16 << 8)) { c->z = 16 << 8; c->vz = -c->vz / 2; }
-    if (c->x > ((WORLD - 16) << 8)) { c->x = (WORLD - 16) << 8; c->vx = -c->vx / 2; }
-    if (c->z > ((WORLD - 16) << 8)) { c->z = (WORLD - 16) << 8; c->vz = -c->vz / 2; }
+    if (c->x > ((ext - 16) << 8)) { c->x = (ext - 16) << 8; c->vx = -c->vx / 2; }
+    if (c->z > ((ext - 16) << 8)) { c->z = (ext - 16) << 8; c->vz = -c->vz / 2; }
     if (c->y > (3000 << 8)) { c->y = 3000 << 8; if (c->vy > 0) c->vy = 0; }
 
     // Suspension travel settles back to rest.
-    c->bob_v -= c->bob >> 3;
-    c->bob_v -= c->bob_v >> 2;
+    c->bob_v -= (c->bob * tn.spring) >> 11;
+    c->bob_v -= (c->bob_v * tn.damp) >> 10;
     c->bob += c->bob_v;
     if (c->bob > (8 << 8)) c->bob = 8 << 8;
     if (c->bob < (-8 << 8)) c->bob = -8 << 8;
@@ -652,7 +715,7 @@ static const u8 car_faces[] = {
 static const Mesh car_mesh = { car_verts, car_faces, sizeof(car_verts) / 3, CAR_FACES };
 
 // The ghost car: the same shape in pale blue.
-static u8 ghost_faces[sizeof(car_faces)];
+EWRAM_BSS static u8 ghost_faces[sizeof(car_faces)];
 static const Mesh ghost_mesh = { car_verts, ghost_faces, sizeof(car_verts) / 3, CAR_FACES };
 
 static void make_ghost(void)
@@ -681,7 +744,8 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
 {
     static const s8 shape[6][2] = { { -17, 46 }, { 17, 46 }, { 24, 0 }, { 17, -46 }, { -17, -46 }, { -24, 0 } };
     if (world_in_water(x, z)) return;
-    s32 above = (c->y >> 8) - (world_height(x, z) >> 8);
+    s32 ground = world_height(x, z);
+    s32 above = (c->y >> 8) - (ground >> 8);
     if (above > 400) return;
     s32 size = 256 - above / 3;
     s32 fx = isin(h), fz = icos(h), flat = 1;
@@ -690,13 +754,50 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
         s32 lx = (shape[i][0] * size) >> 8, lz = (shape[i][1] * size) >> 8;
         q[i].x = x + ((lx * fz + lz * fx) >> 14);
         q[i].z = z + ((lz * fz - lx * fx) >> 14);
-        s32 g = world_height(q[i].x, q[i].z);
+        s32 g = g_track ? ground : world_height(q[i].x, q[i].z);   // circuits: flat across the car
         if (g < 0) g = 0;
         q[i].y = (g >> 8) + (g ? 2 : 0);
         if (g) flat = 0;
     }
     if (flat) r_ground(q, 6, COLOR(M_SHADOW, 0));
     else      r_face(q, 6, COLOR(M_SHADOW, 0), RF_DECAL);
+}
+
+// CPU rivals: the same car in another colour, with a cheaper version far off.
+#define RIVAL_COLORS 7
+EWRAM_BSS static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
+static const u8 rival_mats[RIVAL_COLORS] = { M_STUNT_WHITE, M_BLD2, M_LINE, M_BLD5, M_BLD4, M_GLASS, M_BLD0 };
+
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth)
+{
+    color %= RIVAL_COLORS;
+    u8 *g = rival_faces[color];
+    if (!g[0]) {
+        const u8 *f = car_faces;
+        for (s32 i = 0; i < CAR_FACES; i++) {
+            s32 n = (f[0] & 7) + 2;
+            for (s32 k = 0; k < n; k++) g[k] = f[k];
+            if (f[1] / 4 == M_CAR) g[1] = COLOR(rival_mats[color], f[1] & 3);
+            f += n;
+            g += n;
+        }
+        g = rival_faces[color];
+    }
+    s32 m[9];
+    car_matrix(heading >> 6, pitch, 0, m);
+    if (depth < 320) {
+        if (depth < 200) {
+            wheel(x, y, z, m, -17, -30);
+            wheel(x, y, z, m, 17, -30);
+            wheel(x, y, z, m, -17, 30);
+            wheel(x, y, z, m, 17, 30);
+        }
+        const Mesh mesh = { car_verts, g, sizeof(car_verts) / 3, CAR_FACES };
+        r_mesh(x, y, z, m, &mesh);
+    } else {
+        r_box_mat(x, y, z, m, -20, 4, -44, 20, 16, 44, rival_mats[color]);
+        if (depth < 600) r_box_mat(x, y, z, m, -15, 16, -20, 15, 28, 0, M_GLASS);
+    }
 }
 
 void car_draw(const Car *c, s32 ghost)
@@ -711,6 +812,10 @@ void car_draw(const Car *c, s32 ghost)
     if (ghost) {
         if (!ghost_faces[0]) make_ghost();
         r_mesh(x, y, z, m, &ghost_mesh);
+        return;
+    }
+    if (sb_valid(c)) {
+        sb_draw(c, &car_mesh);
         return;
     }
     wheel(x, y, z, m, -17, -30);

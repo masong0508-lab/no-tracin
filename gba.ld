@@ -28,6 +28,11 @@ SECTIONS {
         . = ALIGN(4);
         __bss_end = .;
     } > iwram
-    .ewram (NOLOAD) : { *(.ewram .ewram.*) } > ewram
+    .ewram (NOLOAD) : {
+        __ewram_start = .;
+        *(.ewram .ewram.*)
+        . = ALIGN(4);
+        __ewram_end = .;
+    } > ewram
     /DISCARD/ : { *(.ARM.exidx*) *(.ARM.attributes) *(.comment) }
 }

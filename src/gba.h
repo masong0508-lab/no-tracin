@@ -69,10 +69,19 @@ enum {
 #define SKYLINE_NEAR 255
 
 #define FOCAL  150     // projection scale in pixels
-#define R_FAR_MAX 1500 // faces beyond r_far are skipped; r_far comes in toward
-#define R_FAR_MIN 1100 // R_FAR_MIN while frames run long, so 30 fps holds
-#define R_FOG1 620     // haze starts
-#define R_FOG2 1020    // deep haze
+#define R_FAR_MAX 2400 // longest draw distance anything may ask for (sizes the recip table)
+// Draw distance and haze for each place: r_far comes in toward the minimum
+// while frames run long and goes back out toward the maximum when there is
+// room. The haze starts at fog1 and is deep from fog2.
+#define FAR_MIN_CITY   1100
+#define FAR_MAX_CITY   1700
+#define FOG1_CITY      680
+#define FOG2_CITY      1060
+#define FAR_MIN_TRACK  1500
+#define FAR_MAX_TRACK  2400
+#define FOG1_TRACK     1000
+#define FOG2_TRACK     1600
+#define FAR_MENU       1100     // title and menu flyovers
 
 typedef struct { s32 x, y, z; } Vec3;
 
@@ -85,9 +94,17 @@ void r_init(void);
 enum { THEME_DAY, THEME_SUNSET, THEME_NIGHT, THEME_SYNTHWAVE, THEME_GAMEBOY, THEME_COUNT };
 void r_init_palette(s32 theme, u16 paint);
 void r_set_paint(u16 paint);
+// Backdrop and ground colours for Freedom City or a race circuit. Takes
+// effect at the next r_init_palette.
+enum { SCENE_CITY, SCENE_FOREST, SCENE_BAY, SCENE_MOUNTAINS };
+void r_set_scene(s32 scene);
 void r_begin(volatile u16 *page, const Camera *cam);
 // A flat polygon lying on the ground, drawn immediately in submission order.
 void r_ground(const Vec3 *v, s32 n, u8 color);
+// The same with vertices already in camera space (see r_xform).
+void r_ground_cam(const Vec3 *cv, s32 n, u8 color);
+void r_xform(s32 x, s32 y, s32 z, Vec3 *out);          // world point to camera space
+void r_xform_dir(s32 dx, s32 dy, s32 dz, Vec3 *out);   // world direction (Q14) to camera space
 // A solid polygon, depth-sorted and drawn by r_flush. Vertices clockwise
 // as seen from the side that should be visible.
 #define RF_TWO_SIDED 1   // draw from both sides
@@ -111,7 +128,11 @@ typedef struct {
     u8 vert_count, face_count;
 } Mesh;
 void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh);
-extern s32 r_far;      // current draw distance, R_FAR_MIN..R_FAR_MAX
+// The same model with its vertices already placed in the world (a bent car).
+void r_mesh_world(const Vec3 *v, const Mesh *mesh);
+extern s32 r_far;      // current draw distance, r_far_min..r_far_max
+extern s32 r_far_min, r_far_max, r_fog1, r_fog2;
+void r_set_far(s32 far_min, s32 far_max, s32 fog1, s32 fog2);
 // Returns camera-space depth of a world point (for culling).
 s32  r_depth(s32 x, s32 z, s32 *side);
 // Could anything within `radius` of ground point (x, z) be on screen?

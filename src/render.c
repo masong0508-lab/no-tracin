@@ -11,7 +11,7 @@
 #define BUCKETS   512      // depth buckets, 8 units each
 #define SUB       12       // fixed-point bits for edge walking
 #define RECIPS    (R_FAR_MAX * 2)
-#define LIMIT     16000    // projected coordinates are clamped to this
+#define LIMIT     32000    // projected coordinates are clamped to this
 
 #define PANO_W    944      // skyline panorama: about FOCAL * 2 * pi pixels round
 #define PANO_H    32
@@ -31,7 +31,18 @@ typedef struct {
 static Face faces[MAX_FACES];
 static s16  heads[BUCKETS];
 static s32  face_count;
-s32 r_far = R_FAR_MAX;
+s32 r_far = FAR_MENU, r_far_min = FAR_MENU, r_far_max = FAR_MENU;
+s32 r_fog1 = FOG1_TRACK, r_fog2 = FOG2_TRACK;
+
+void r_set_far(s32 far_min, s32 far_max, s32 fog1, s32 fog2)
+{
+    if (far_max > R_FAR_MAX) far_max = R_FAR_MAX;
+    if (far_min > far_max) far_min = far_max;
+    r_far = r_far_min = far_min;
+    r_far_max = far_max;
+    r_fog1 = fog1;
+    r_fog2 = fog2;
+}
 
 static volatile u16 *target;
 static s32 cam_x, cam_y, cam_z;
@@ -72,33 +83,69 @@ s32 isqrt(u32 v)
 }
 
 static u32 rng_state = 12345;
+static s32 scene;
 static u32 rnd(void)
 {
     rng_state = rng_state * 1664525u + 1013904223u;
     return rng_state >> 16;
 }
 
-// Distant city skyline over low hills, drawn once into the panorama.
+static s32 ground_mat = M_ASPHALT;
+
+// Distant skyline drawn once into the panorama: city towers over low hills,
+// forest hills, the bay's skyline over the water, or mountains.
 static void build_panorama(void)
 {
     static u8 far[PANO_W] EWRAM_BSS, near[PANO_W] EWRAM_BSS;
-    // Far layer: hills with towers on them. Near layer: lower, darker blocks.
+    rng_state = 12345 + scene * 977;
     for (s32 x = 0; x < PANO_W; x++) {
         s32 a = (x * 1024) / PANO_W;
-        far[x] = 3 + ((isin(a * 3) + isin(a * 7 + 100) + 2 * 16384) >> 13);
+        if (scene == SCENE_MOUNTAINS)
+            far[x] = 8 + ((isin(a * 2) + isin(a * 5 + 300) / 2 + isin(a * 11 + 50) / 4 + 2 * 16384) * 3 >> 13);
+        else if (scene == SCENE_FOREST)
+            far[x] = 4 + ((isin(a * 3) + isin(a * 5 + 100) + 2 * 16384) * 3 >> 14);
+        else
+            far[x] = 3 + ((isin(a * 3) + isin(a * 7 + 100) + 2 * 16384) >> 13);
+        near[x] = 0;
     }
-    for (s32 x = 0; x < PANO_W;) {
-        s32 w = 6 + rnd() % 14, h = 6 + rnd() % 13;
-        if (rnd() % 7 == 0) h += 8;
-        for (s32 i = 0; i < w && x < PANO_W; i++, x++)
-            if (far[x] < h) far[x] = h;
-        x += rnd() % 10;
-    }
-    for (s32 x = 0; x < PANO_W;) {
-        s32 w = 10 + rnd() % 22, h = 2 + rnd() % 9;
-        for (s32 i = 0; i < w && x < PANO_W; i++, x++) near[x] = h;
-        s32 gap = rnd() % 6;
-        for (s32 i = 0; i < gap && x < PANO_W; i++, x++) near[x] = 1;
+    if (scene == SCENE_MOUNTAINS) {
+        // Jagged peaks.
+        for (s32 x = 0; x < PANO_W;) {
+            s32 w = 20 + rnd() % 40, h = 14 + rnd() % 17, x0 = x;
+            for (; x < x0 + w && x < PANO_W; x++) {
+                s32 d = x - x0 < w / 2 ? x - x0 : x0 + w - x;
+                s32 v = d * h * 2 / w + (rnd() & 1);
+                if (far[x] < v) far[x] = v > PANO_H - 1 ? PANO_H - 1 : v;
+            }
+        }
+        for (s32 x = 0; x < PANO_W; x++) {
+            s32 a = (x * 1024) / PANO_W;
+            near[x] = 3 + ((isin(a * 4 + 200) + 16384) * 7 >> 15);
+        }
+    } else if (scene == SCENE_FOREST) {
+        // Tree tops along the near hills.
+        for (s32 x = 0; x < PANO_W;) {
+            s32 w = 3 + rnd() % 5, h = 3 + rnd() % 5;
+            s32 a = (x * 1024) / PANO_W;
+            s32 base = 2 + ((isin(a * 6) + 16384) * 3 >> 15);
+            for (s32 i = 0; i < w && x < PANO_W; i++, x++)
+                near[x] = base + (i == 0 || i == w - 1 ? h - 1 : h);
+        }
+    } else {
+        for (s32 x = 0; x < PANO_W;) {
+            s32 w = 6 + rnd() % 14, h = 6 + rnd() % 13;
+            if (rnd() % 7 == 0) h += 8;
+            for (s32 i = 0; i < w && x < PANO_W; i++, x++)
+                if (far[x] < h) far[x] = h;
+            x += rnd() % 10;
+        }
+        for (s32 x = 0; x < PANO_W;) {
+            s32 w = 10 + rnd() % 22, h = 2 + rnd() % 9;
+            if (scene == SCENE_BAY) h = 1 + rnd() % 3;     // low waterfront
+            for (s32 i = 0; i < w && x < PANO_W; i++, x++) near[x] = h;
+            s32 gap = rnd() % 6;
+            for (s32 i = 0; i < gap && x < PANO_W; i++, x++) near[x] = 1;
+        }
     }
     for (s32 k = 0; k < PANO_H; k++)
         for (s32 x = 0; x < PANO_W; x += 2) {
@@ -110,6 +157,14 @@ static void build_panorama(void)
             }
             pano[k][x / 2] = c[0] | (c[1] << 8);
         }
+}
+
+void r_set_scene(s32 s)
+{
+    if (s == scene) return;
+    scene = s;
+    ground_mat = s == SCENE_CITY ? M_ASPHALT : M_GRASS;
+    build_panorama();
 }
 
 void r_init(void)
@@ -189,9 +244,23 @@ void r_init_palette(s32 theme, u16 paint)
         [M_SHADOW]   = RGB15(5, 5, 6),
         [M_SPLASH]   = RGB15(24, 28, 31),
     };
+    // Colours that change with the scene (circuits reuse city materials).
+    static const u16 forest[M_COUNT] = {
+        [M_GRASS] = RGB15(8, 20, 5), [M_TREE] = RGB15(4, 13, 4), [M_BLD1] = RGB15(15, 9, 5),
+        [M_ASPHALT] = RGB15(12, 12, 13),
+    };
+    static const u16 bay[M_COUNT] = {
+        [M_GRASS] = RGB15(10, 20, 8), [M_ASPHALT] = RGB15(12, 12, 14), [M_WATER] = RGB15(4, 12, 24),
+    };
+    static const u16 mountains[M_COUNT] = {
+        [M_GRASS] = RGB15(20, 18, 9), [M_TREE] = RGB15(7, 13, 5), [M_BLD5] = RGB15(18, 14, 10),
+        [M_BLD1] = RGB15(14, 9, 5), [M_BLD3] = RGB15(29, 28, 25), [M_ASPHALT] = RGB15(13, 12, 12),
+    };
+    const u16 *over = scene == SCENE_FOREST ? forest : scene == SCENE_BAY ? bay :
+                      scene == SCENE_MOUNTAINS ? mountains : 0;
     static const s32 scale[4] = { 32, 26, 20, 14 };
     for (s32 m = 0; m < M_COUNT; m++) {
-        u16 bc = m == M_CAR ? paint : base[m];
+        u16 bc = m == M_CAR ? paint : (over && over[m]) ? over[m] : base[m];
         if (m != M_LINE && m != M_FIRE) bc = tint(bc, t);   // road paint and fire stay bright
         s32 r = bc & 31, g = (bc >> 5) & 31, b = (bc >> 10) & 31;
         for (s32 s = 0; s < 4; s++) {
@@ -205,8 +274,15 @@ void r_init_palette(s32 theme, u16 paint)
     // Sky: haze at the horizon up to deep blue overhead.
     for (s32 i = 0; i < SKY_STEPS; i++)
         PAL_BG[SKY_BASE + i] = mix(HAZE_R, HAZE_G, HAZE_B, t[3], t[4], t[5], (i * 32) / (SKY_STEPS - 1));
-    PAL_BG[SKYLINE_FAR]  = mix(14 * t[6] / 32, 17 * t[7] / 32, 23 * t[8] / 32, HAZE_R, HAZE_G, HAZE_B, 14);
-    PAL_BG[SKYLINE_NEAR] = mix(10 * t[6] / 32, 12 * t[7] / 32, 17 * t[8] / 32, HAZE_R, HAZE_G, HAZE_B, 8);
+    static const u8 skyline[4][6] = {
+        { 14, 17, 23, 10, 12, 17 },     // city
+        { 12, 17, 18,  4, 11,  5 },     // forest
+        { 14, 17, 23, 10, 12, 17 },     // bay
+        { 15, 15, 21, 15, 12,  8 },     // mountains
+    };
+    const u8 *sk = skyline[scene];
+    PAL_BG[SKYLINE_FAR]  = mix(sk[0] * t[6] / 32, sk[1] * t[7] / 32, sk[2] * t[8] / 32, HAZE_R, HAZE_G, HAZE_B, 14);
+    PAL_BG[SKYLINE_NEAR] = mix(sk[3] * t[6] / 32, sk[4] * t[7] / 32, sk[5] * t[8] / 32, HAZE_R, HAZE_G, HAZE_B, 8);
     // Menu colours, untouched by the time of day.
     static const u16 ui[8] = {
         RGB15(31, 29, 8), RGB15(31, 31, 31), RGB15(16, 17, 20), RGB15(12, 28, 31),
@@ -241,8 +317,8 @@ void r_set_paint(u16 paint)
 static inline __attribute__((always_inline)) u32 fog(u32 c, s32 depth)
 {
     if (c >= FOG1_BASE) return c;
-    if (depth > R_FOG2) return FOG2_BASE + (c >> 2);
-    if (depth > R_FOG1) return c + FOG1_BASE;
+    if (depth > r_fog2) return FOG2_BASE + (c >> 2);
+    if (depth > r_fog1) return c + FOG1_BASE;
     return c;
 }
 
@@ -338,7 +414,7 @@ static void draw_backdrop(s32 yaw)
     if (horizon < -1000) horizon = -1000;
     if (horizon > 1000) horizon = 1000;
     if (cp_cos < 0) {
-        fill_rows(0, horizon, COLOR(M_ASPHALT, 0));
+        fill_rows(0, horizon, COLOR(ground_mat, 0));
         fill_rows(horizon, SCREEN_H, SKY_BASE + 6);
         return;
     }
@@ -360,12 +436,12 @@ static void draw_backdrop(s32 yaw)
         if (first < SCREEN_W / 2) copy16(row + first, &pano[k][0], SCREEN_W / 2 - first);
     }
     // Ground fades into the haze toward the horizon.
-    s32 r2 = ground_row(R_FOG2), r1 = ground_row(R_FOG1);
+    s32 r2 = ground_row(r_fog2), r1 = ground_row(r_fog1);
     if (r2 < horizon) r2 = horizon;
     if (r1 < r2) r1 = r2;
-    fill_rows(horizon, r2, FOG2_BASE + M_ASPHALT);
-    fill_rows(r2, r1, FOG1_BASE + COLOR(M_ASPHALT, 0));
-    fill_rows(r1, SCREEN_H, COLOR(M_ASPHALT, 0));
+    fill_rows(horizon, r2, FOG2_BASE + ground_mat);
+    fill_rows(r2, r1, FOG1_BASE + COLOR(ground_mat, 0));
+    fill_rows(r1, SCREEN_H, COLOR(ground_mat, 0));
 }
 
 void r_begin(volatile u16 *page, const Camera *cam)
@@ -490,21 +566,6 @@ IWRAM_CODE static s32 project_poly(const Vec3 *v, s32 n, s16 *sx, s16 *sy, s32 c
     return m;
 }
 
-IWRAM_CODE void r_ground(const Vec3 *v, s32 n, u8 color)
-{
-    Vec3 cv[MAXV];
-    s32 near = 0, sum = 0;
-    for (s32 i = 0; i < n; i++) {
-        to_camera(v[i].x, v[i].y, v[i].z, &cv[i]);
-        near += cv[i].z < NEAR;
-        sum += cv[i].z;
-    }
-    if (near == n || sum > r_far * n) return;
-    s16 sx[MAXV], sy[MAXV];
-    s32 m = project_poly(cv, n, sx, sy, 0);
-    if (m) fill_poly(sx, sy, m, fog(color, sum / n));
-}
-
 // Cheap tests in camera space, before any projection work.
 // The view is 120 / FOCAL = 0.8 wide and 80 / FOCAL = 0.53 tall per unit of depth.
 static inline __attribute__((always_inline)) s32 in_view(const Vec3 *v, s32 n)
@@ -518,6 +579,37 @@ static inline __attribute__((always_inline)) s32 in_view(const Vec3 *v, s32 n)
         bottom &= -y15 > z8;
     }
     return !(left | right | top | bottom);
+}
+
+IWRAM_CODE void r_ground_cam(const Vec3 *cv, s32 n, u8 color)
+{
+    s32 near = 0, sum = 0;
+    for (s32 i = 0; i < n; i++) {
+        near += cv[i].z < NEAR;
+        sum += cv[i].z;
+    }
+    if (near == n || sum > r_far * n || !in_view(cv, n)) return;
+    s16 sx[MAXV], sy[MAXV];
+    s32 m = project_poly(cv, n, sx, sy, 0);
+    if (m) fill_poly(sx, sy, m, fog(color, sum / n));
+}
+
+IWRAM_CODE void r_ground(const Vec3 *v, s32 n, u8 color)
+{
+    Vec3 cv[MAXV];
+    for (s32 i = 0; i < n; i++) to_camera(v[i].x, v[i].y, v[i].z, &cv[i]);
+    r_ground_cam(cv, n, color);
+}
+
+void r_xform(s32 x, s32 y, s32 z, Vec3 *out) { to_camera(x, y, z, out); }
+
+void r_xform_dir(s32 dx, s32 dy, s32 dz, Vec3 *out)
+{
+    s32 x1 = (dx * cy_cos - dz * cy_sin) >> 14;
+    s32 z1 = (dx * cy_sin + dz * cy_cos) >> 14;
+    out->x = x1;
+    out->y = (dy * cp_cos + z1 * cp_sin) >> 14;
+    out->z = (z1 * cp_cos - dy * cp_sin) >> 14;
 }
 
 // A face listed clockwise from outside faces away from the eye (at the
@@ -626,16 +718,8 @@ IWRAM_CODE void r_box_mat(s32 px, s32 py, s32 pz, const s32 *m,
     queue_box(cv, material, 31);
 }
 
-IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
+IWRAM_CODE static void queue_mesh(const Vec3 *cv, const Mesh *mesh)
 {
-    Vec3 cv[MESH_MAX_VERTS];
-    const s8 *v = mesh->verts;
-    for (s32 i = 0; i < mesh->vert_count; i++, v += 3) {
-        s32 lx = v[0], ly = v[1], lz = v[2];
-        to_camera(px + ((m[0] * lx + m[3] * ly + m[6] * lz) >> 14),
-                  py + ((m[1] * lx + m[4] * ly + m[7] * lz) >> 14),
-                  pz + ((m[2] * lx + m[5] * ly + m[8] * lz) >> 14), &cv[i]);
-    }
     const u8 *f = mesh->faces;
     s32 parent = -1;
     for (s32 i = 0; i < mesh->face_count; i++) {
@@ -648,6 +732,26 @@ IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
             queue_cam_face(q, n, f[1], 0, parent - 1);
         f += 2 + n;
     }
+}
+
+IWRAM_CODE void r_mesh(s32 px, s32 py, s32 pz, const s32 *m, const Mesh *mesh)
+{
+    Vec3 cv[MESH_MAX_VERTS];
+    const s8 *v = mesh->verts;
+    for (s32 i = 0; i < mesh->vert_count; i++, v += 3) {
+        s32 lx = v[0], ly = v[1], lz = v[2];
+        to_camera(px + ((m[0] * lx + m[3] * ly + m[6] * lz) >> 14),
+                  py + ((m[1] * lx + m[4] * ly + m[7] * lz) >> 14),
+                  pz + ((m[2] * lx + m[5] * ly + m[8] * lz) >> 14), &cv[i]);
+    }
+    queue_mesh(cv, mesh);
+}
+
+IWRAM_CODE void r_mesh_world(const Vec3 *v, const Mesh *mesh)
+{
+    Vec3 cv[MESH_MAX_VERTS];
+    for (s32 i = 0; i < mesh->vert_count; i++) to_camera(v[i].x, v[i].y, v[i].z, &cv[i]);
+    queue_mesh(cv, mesh);
 }
 
 IWRAM_CODE void r_flush(void)

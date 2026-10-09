@@ -2,11 +2,13 @@
 // bitmap over a frozen copy of the last frame, so they can hold any
 // amount of text (sprites run out at 128).
 #include "menu.h"
+#include "softbody.h"
 #include "game.h"
 #include "sound.h"
 #include "hud.h"
 #include "world.h"
 #include "font.h"
+#include "tune.h"
 
 u8 g_opt[OPT_COUNT];
 
@@ -28,6 +30,12 @@ static const OptDef defs[OPT_COUNT] = {
     [OPT_HUD]      = { "HUD",          2, { "FULL", "CLEAN" } },
     [OPT_SOUND]    = { "SOUND",        3, { "ON", "NO ENGINE", "OFF" } },
     [OPT_AUTOSAVE] = { "AUTOSAVE",     2, { "ON", "OFF" } },
+    [OPT_PHYSICS]  = { "PHYSICS",      2, { "SOFT-BODY", "ARCADE" } },
+};
+// The order the options menu lists them in.
+static const u8 opt_order[OPT_COUNT] = {
+    OPT_PHYSICS, OPT_GRAVITY, OPT_ENGINE, OPT_TYRES, OPT_CRASHES, OPT_SPEED, OPT_SLOWMO,
+    OPT_TIME, OPT_PAINT, OPT_SHAKE, OPT_UNITS, OPT_GHOST, OPT_HUD, OPT_SOUND, OPT_AUTOSAVE,
 };
 
 static const u16 paints[7] = {
@@ -54,11 +62,14 @@ u16 paint_color(s32 frame)
 
 void options_apply(void)
 {
-    static const s16 grav[3] = { 35, 13, 54 }, power[3] = { 28000, 40000, 64000 }, grip[3] = { 38, 56, 13 };
+    static const s16 grav[3] = { 35, 13, 54 }, grip[3] = { 38, 56, 13 };
+    static const s32 power[3] = { 28000, 40000, 64000 };     // past s16: TUNED and ROCKET wrapped negative
     car_g = grav[g_opt[OPT_GRAVITY]];
     car_power = power[g_opt[OPT_ENGINE]];
     car_grip = grip[g_opt[OPT_TYRES]];
     car_crashes = g_opt[OPT_CRASHES] == 0;
+    car_softbody = g_opt[OPT_PHYSICS] == 0;
+    tune_apply();                      // the physics lab's sliders on top of the presets
     g_units_kmh = g_opt[OPT_UNITS];
     r_init_palette(g_opt[OPT_TIME], paint_color(0));
     sound_mode(g_opt[OPT_SOUND]);
@@ -218,21 +229,31 @@ s32 menu_list(const char *title, const char *const *items, s32 n)
     }
 }
 
+static void menu_tune(void);
+
 void menu_options(void)
 {
-    s32 sel = 0, n = OPT_COUNT + 1, frame = 0, first = 1;
+    // Row 0 opens the physics lab, then the options, then DONE.
+    s32 sel = 0, n = OPT_COUNT + 2, frame = 0, first = 1;
     flush_keys();
     for (;;) {
         u16 k = menu_keys();
         if (k & KEY_UP)   sel = (sel + n - 1) % n;
         if (k & KEY_DOWN) sel = (sel + 1) % n;
-        if (sel < OPT_COUNT && (k & (KEY_LEFT | KEY_RIGHT | KEY_A))) {
-            s32 c = defs[sel].count;
-            g_opt[sel] = (g_opt[sel] + ((k & KEY_LEFT) ? c - 1 : 1)) % c;
+        if (sel == 0 && (k & (KEY_RIGHT | KEY_A))) {
+            sound_play(SFX_CHECKPOINT);
+            menu_tune();
+            flush_keys();
+            first = 1;
+            continue;
+        }
+        if (sel > 0 && sel <= OPT_COUNT && (k & (KEY_LEFT | KEY_RIGHT | KEY_A))) {
+            s32 o = opt_order[sel - 1], c = defs[o].count;
+            g_opt[o] = (g_opt[o] + ((k & KEY_LEFT) ? c - 1 : 1)) % c;
             options_apply();
             sound_play(SFX_BEEP);
         }
-        if ((k & KEY_B) || (sel == OPT_COUNT && (k & (KEY_A | KEY_START)))) {
+        if ((k & KEY_B) || (sel == n - 1 && (k & (KEY_A | KEY_START)))) {
             if (!g_opt[OPT_AUTOSAVE]) save_system();
             return;
         }
@@ -240,19 +261,89 @@ void menu_options(void)
         frame++;
         if (idle(k, &first)) continue;
 
-        frame_begin("OPTIONS", n - 2);
-        s32 y = menu_top(n - 2) - 4;
-        for (s32 i = 0; i < n; i++, y += 9) {
-            if (i == sel) rect(20, y - 1, 220, y + 8, C_HILITE);
-            if (i == OPT_COUNT) { text_c(y, "DONE", i == sel ? C_YELLOW : C_WHITE, 1); break; }
-            text(26, y, defs[i].name, i == sel ? C_YELLOW : C_WHITE, 1);
-            const char *v = defs[i].values[g_opt[i]];
+        frame_begin("OPTIONS", n - 3);
+        s32 y = menu_top(n - 3) - 4;
+        for (s32 i = 0; i < n; i++, y += 8) {
+            if (i == sel) rect(20, y - 1, 220, y + 7, C_HILITE);
+            if (i == n - 1) { text_c(y, "DONE", i == sel ? C_YELLOW : C_WHITE, 1); break; }
+            if (i == 0) {
+                text(26, y, "PHYSICS LAB", i == sel ? C_YELLOW : C_WHITE, 1);
+                text_r(216, y, tune_stock() ? "STOCK >" : "TUNED >", i == sel ? C_CYAN : C_GREY);
+                continue;
+            }
+            s32 o = opt_order[i - 1];
+            text(26, y, defs[o].name, i == sel ? C_YELLOW : C_WHITE, 1);
+            const char *v = defs[o].values[g_opt[o]];
             if (i == sel) {
                 text(118, y, "<", C_CYAN, 1);
                 text_r(216, y, ">", C_CYAN);
                 text_r(208, y, v, C_CYAN);
             } else text_r(208, y, v, C_GREY);
         }
+        frame_end();
+    }
+}
+
+// The physics lab: a slider a row, 10% a notch. UP/DOWN pick (the list
+// scrolls), LEFT/RIGHT change, A puts the row back to 100%, SELECT all of
+// them; B or START leaves and saves. Changes apply as they are made.
+#define LAB_ROWS 11
+#define LAB_BAR  114            // bar's left edge: 2 pixels a notch, the 100% mark at +20
+
+static void menu_tune(void)
+{
+    s32 sel = 0, top = 0, first = 1, n = TUNE_COUNT;
+    flush_keys();
+    for (;;) {
+        u16 k = menu_keys();
+        s32 was = g_tune[sel], changed = 0;
+        if (k & KEY_UP)   { sel = (sel + n - 1) % n; sound_play(SFX_BEEP); }
+        if (k & KEY_DOWN) { sel = (sel + 1) % n; sound_play(SFX_BEEP); }
+        if (k & (KEY_UP | KEY_DOWN)) was = g_tune[sel];
+        if ((k & KEY_LEFT) && g_tune[sel] > tune_min(sel)) g_tune[sel]--;
+        if ((k & KEY_RIGHT) && g_tune[sel] < tune_max(sel)) g_tune[sel]++;
+        if (k & KEY_A) g_tune[sel] = TUNE_STOCK;
+        if (k & KEY_SELECT) {
+            for (s32 i = 0; i < n; i++) g_tune[i] = TUNE_STOCK;
+            changed = 1;
+        }
+        if (g_tune[sel] != was) changed = 1;
+        if (changed) { options_apply(); sound_play(SFX_BEEP); }
+        if (k & (KEY_B | KEY_START)) {
+            tune_save();
+            sound_play(SFX_CHECKPOINT);
+            return;
+        }
+        if (sel < top) top = sel;
+        if (sel >= top + LAB_ROWS) top = sel - LAB_ROWS + 1;
+        if (idle(k, &first)) continue;
+
+        frame_begin("PHYSICS LAB", 12);
+        s32 y = menu_top(12);
+        char buf[8];
+        for (s32 i = top; i < n && i < top + LAB_ROWS; i++, y += 10) {
+            s32 on = i == sel, v = g_tune[i], stock = v == TUNE_STOCK;
+            if (on) rect(18, y - 2, 216, y + 8, C_HILITE);
+            text(20, y, tune_name(i), on ? C_YELLOW : C_WHITE, 1);
+            // The bar: its range dark, the value filled, a mark at 100%.
+            rect(LAB_BAR + tune_min(i) * 2, y + 1, LAB_BAR + tune_max(i) * 2, y + 6, C_INK);
+            if (v) rect(LAB_BAR, y + 2, LAB_BAR + v * 2, y + 5, on ? C_YELLOW : stock ? C_GREY : C_CYAN);
+            rect(LAB_BAR + 20, y, LAB_BAR + 22, y + 7, C_WHITE);
+            put(put_num(buf, v * 10), "%");
+            text_r(210, y, buf, on ? C_YELLOW : stock ? C_GREY : C_CYAN);
+            if (on) {
+                if (v > tune_min(i)) text(178, y, "<", C_CYAN, 1);
+                if (v < tune_max(i)) text(211, y, ">", C_CYAN, 1);
+            }
+        }
+        // Where the page is in the list.
+        s32 h = (LAB_ROWS * 10 * LAB_ROWS) / n;
+        s32 y0 = menu_top(12) - 2 + (top * LAB_ROWS * 10) / n;
+        rect(220, menu_top(12) - 2, 222, menu_top(12) - 2 + LAB_ROWS * 10, C_INK);
+        rect(220, y0, 222, y0 + h, C_GREY);
+        rect(20, y - 1, 220, y, C_GREY);
+        text_c(y + 2, tune_hint(sel), C_CYAN, 1);
+        text_c(y + 12, "A 100%  SELECT ALL  B DONE", C_GREY, 1);
         frame_end();
     }
 }
@@ -302,6 +393,30 @@ void menu_records(void)
             text(30, y, names[i], C_WHITE, 1);
             text_r(210, y, buf, C_CYAN);
         }
+        frame_end();
+    }
+}
+
+void menu_table(const char *title, const char *const *left, const char *const *right,
+                const u8 *hilite, s32 n, const char *footer)
+{
+    s32 first = 1, frame = 0;
+    flush_keys();
+    for (;;) {
+        u16 k = menu_keys();
+        if (k & (KEY_A | KEY_B | KEY_START)) { sound_play(SFX_CHECKPOINT); return; }
+        frame++;
+        if (!(frame & 15)) first = 1;          // blink the highlights
+        if (idle(k, &first)) continue;
+        frame_begin(title, n + 1);
+        s32 y = menu_top(n + 1);
+        for (s32 i = 0; i < n; i++, y += 10) {
+            s32 on = hilite && hilite[i];
+            u32 c = on && (frame & 16) ? C_YELLOW : C_WHITE;
+            text(30, y, left[i], c, 1);
+            text_r(210, y, right[i], on ? C_YELLOW : C_CYAN);
+        }
+        text_c(y + 2, footer, C_GREY, 1);
         frame_end();
     }
 }
@@ -371,8 +486,9 @@ void menu_cheats(void)
 #define SRAM ((volatile u8 *)0x0E000000)
 static const char sram_tag[] __attribute__((used, aligned(4))) = "SRAM_V113";
 
-#define SYS_MAGIC  0x3152544E   // "NTR1"
-#define SLOT_MAGIC 0x3153544E   // "NTS1"
+#define SYS_MAGIC  0x3252544E   // "NTR2": the city at its present size
+#define SYS_OLD    0x3152544E   // "NTR1": the small city; options and stats still count
+#define SLOT_MAGIC 0x3253544E   // "NTS2" (slots saved in the small city are gone)
 #define SLOT_BASE  0x0100
 #define SLOT_SIZE  0x0200
 #define GHOST_BASE 0x0800
@@ -430,15 +546,23 @@ void save_init(void)
 {
     (void)*(volatile const char *)sram_tag;
     *(volatile u16 *)0x04000204 |= 0x0003;     // SRAM wait states (8 cycles)
+    tune_load();
     SysSave sv;
     sram_read(0, &sv, sizeof(sv));
-    if (sv.magic != SYS_MAGIC || sv.sum != checksum(&sv, sizeof(sv) - 4)) {
+    if ((sv.magic != SYS_MAGIC && sv.magic != SYS_OLD) || sv.sum != checksum(&sv, sizeof(sv) - 4)) {
         for (s32 i = 0; i < OPT_COUNT; i++) g_opt[i] = 0;
         return;
     }
     for (s32 i = 0; i < OPT_COUNT; i++)
         g_opt[i] = sv.opt[i] < defs[i].count ? sv.opt[i] : 0;
     g_rec = sv.rec;
+    if (sv.magic == SYS_OLD) {
+        // The Stunt Park lap, its ghost and the stars were all somewhere
+        // else in the small city.
+        g_rec.best_steps = 0;
+        g_rec.stars = 0;
+        return;
+    }
     s32 *count, max;
     void *ghost = game_ghost_data(&count, &max);
     if (sv.ghost_count > 0 && sv.ghost_count * 12 <= max) {
@@ -475,6 +599,24 @@ s32 load_slot(s32 slot, Car *c, s32 *score)
     return 1;
 }
 
+void save_blob(u32 magic, u32 at, const void *p, u32 n)
+{
+    u32 sum = checksum(p, n) ^ magic;
+    sram_write(at, &magic, 4);
+    sram_write(at + 4, p, n);
+    sram_write(at + 4 + n, &sum, 4);
+}
+
+s32 load_blob(u32 magic, u32 at, void *p, u32 n)
+{
+    u32 m, sum;
+    sram_read(at, &m, 4);
+    if (m != magic) return 0;
+    sram_read(at + 4, p, n);
+    sram_read(at + 4 + n, &sum, 4);
+    return sum == (checksum(p, n) ^ magic);
+}
+
 void save_erase(void)
 {
     for (u32 i = 0; i < SLOT_BASE + 3 * SLOT_SIZE; i++) SRAM[i] = 0;
@@ -507,7 +649,7 @@ s32 menu_slot(const char *title, s32 saving)
             text(30, y, buf, i == sel ? C_YELLOW : C_WHITE, 1);
             if (!ok[i]) { text(30, y + 9, "EMPTY", C_GREY, 1); continue; }
             s32 x = s[i].car.x >> 8, z = s[i].car.z >> 8;
-            text_r(210, y, x > PARK_X0 && x < PARK_X1 && z > PARK_Z0 && z < PARK_Z1 ? "STUNT PARK" : "CITY", C_CYAN);
+            text_r(210, y, park_contains(x, z, 0) ? "STUNT PARK" : "CITY", C_CYAN);
             p = put(buf, "SCORE ");
             put_num(p, s[i].score);
             text(30, y + 9, buf, C_GREY, 1);

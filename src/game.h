@@ -33,7 +33,7 @@ extern Records g_rec;
 extern s32 g_new_best;                  // set when a lap beats the best (for autosave)
 extern s32 g_units_kmh;                 // speeds in messages
 #define NITRO_MAX  1000
-#define STAR_COUNT 22
+#define STAR_COUNT 30                   // at most 32: one bit each in Records.stars
 extern s32 cheat_nitro;
 s32  game_stars(void);                  // stars collected
 void game_draw_stars(s32 frame);        // star sprites
