@@ -5,8 +5,8 @@
 
 extern volatile u32 g_frames;
 
-#define MAX_SOLIDS   1100
-#define MAX_FEATURES 48
+#define MAX_SOLIDS   2400
+#define MAX_FEATURES 160     // feat_refs holds feature numbers as bytes
 
 typedef struct { s16 x0, z0, x1, z1, h; u8 material; } Solid;
 
@@ -29,7 +29,7 @@ static s32     feature_count;
 static u8      block_kind[BLOCKS][BLOCKS] EWRAM_BSS;
 // Features touching each block, so height and wall queries only look at
 // the few that can matter.
-#define MAX_FEAT_REFS 320
+#define MAX_FEAT_REFS 512
 static u8      feat_refs[MAX_FEAT_REFS] EWRAM_BSS;
 static u16     cell_first[BLOCKS][BLOCKS] EWRAM_BSS;
 static u8      cell_count[BLOCKS][BLOCKS] EWRAM_BSS;
@@ -40,11 +40,12 @@ static u8      block_count[BLOCKS][BLOCKS] EWRAM_BSS;
 // proves nothing is ever dropped.
 s32 world_overflow EWRAM_BSS;
 
-const Loop the_loop = { 820, 1550, 120, 100, 84 };
+const Loop the_loop = { LOOP_X, LOOP_Z, 120, 100, 84 };
 
-#define KIND_PARK 255
-#define BANK_H    100
 #define RAIL_H    14
+#define ALLEY     32                              // gap between buildings on a lot
+#define LOT       (BLOCK - 2 * (ROAD_HALF + WALK))   // the building plot inside the sidewalk
+#define KICKERS   (24 * (WORLD / 512) * (WORLD / 512) / 256)   // street kickers to try: 24 per 16 x 16 old blocks
 
 // ---------------------------------------------------------------- layout
 
@@ -54,12 +55,6 @@ static u32 hash(u32 x)
     x ^= x >> 15; x *= 0x846ca68b;
     x ^= x >> 16;
     return x;
-}
-
-static s32 in_park(s32 x, s32 z, s32 margin)
-{
-    return x > PARK_X0 - margin && x < PARK_X1 + margin &&
-           z > PARK_Z0 - margin && z < PARK_Z1 + margin;
 }
 
 static void add_solid(s32 x0, s32 z0, s32 x1, s32 z1, s32 h, s32 material)
@@ -77,6 +72,81 @@ static void add_feature(s32 type, s32 axis, s32 x0, s32 z0, s32 x1, s32 z1, s32 
     f->x0 = x0; f->z0 = z0; f->x1 = x1; f->z1 = z1; f->h0 = h0; f->h1 = h1;
 }
 
+// What stands on each lot: a plaza of trees, a tower with low wings, a
+// quarter of four buildings, nine low ones in rows, or three buildings and
+// a little square. Parcels are split by alleys so no wall gets wider than
+// a lot quarter (long faces sort badly against things in front of them).
+enum { LOT_PLAZA, LOT_TOWER, LOT_QUAD, LOT_ROWS, LOT_MIXED };
+static const u8 lot_kinds[16] = {
+    LOT_PLAZA, LOT_PLAZA, LOT_TOWER, LOT_TOWER, LOT_TOWER, LOT_QUAD, LOT_QUAD, LOT_QUAD,
+    LOT_QUAD, LOT_ROWS, LOT_ROWS, LOT_ROWS, LOT_ROWS, LOT_MIXED, LOT_MIXED, LOT_MIXED,
+};
+#define KIND_PARK 255
+
+static void tree(s32 x, s32 z, u32 r)
+{
+    s32 w = 20 + (r & 3), h = 70 + (r >> 2) % 21;
+    add_solid(x - w, z - w, x + w, z + w, h, M_TREE);
+}
+
+// Trees in a plaza, in sixteenths of the lot.
+static const u8 plaza_trees[5][2] = { { 3, 4 }, { 11, 3 }, { 7, 8 }, { 3, 12 }, { 12, 12 } };
+
+static void build_lot(s32 kind, u32 r, s32 x0, s32 z0)
+{
+    const s32 half = (LOT - ALLEY) / 2, third = (LOT - 2 * ALLEY) / 3;
+    s32 x1 = x0 + LOT, z1 = z0 + LOT;
+    switch (kind) {
+    case LOT_PLAZA:
+        for (s32 i = 0; i < 5; i++) {
+            u32 t = hash(r + i);
+            tree(x0 + plaza_trees[i][0] * (LOT / 16) + (t & 63) - 32,
+                 z0 + plaza_trees[i][1] * (LOT / 16) + ((t >> 6) & 63) - 32, t >> 12);
+        }
+        break;
+    case LOT_TOWER: {
+        // A tall tower in the middle, low wings either side, trees in front.
+        const s32 m = (LOT - 320) / 2;
+        s32 mat = M_BLD0 + (r >> 8) % 6, wing = M_BLD0 + (r >> 20) % 6;
+        s32 hw = 60 + (r >> 24) % 40;
+        add_solid(x0 + m, z0 + m, x1 - m, z1 - m, MAX_BUILDING_H - 200 + (r >> 12) % 201, mat);
+        if (r & 1) {
+            add_solid(x0, z0 + m, x0 + m - ALLEY, z1 - m, hw, wing);
+            add_solid(x1 - m + ALLEY, z0 + m, x1, z1 - m, hw, wing);
+            tree(x0 + m / 2, z0 + m / 2, r >> 3);
+            tree(x1 - m / 2, z1 - m / 2, r >> 5);
+        } else {
+            add_solid(x0 + m, z0, x1 - m, z0 + m - ALLEY, hw, wing);
+            add_solid(x0 + m, z1 - m + ALLEY, x1 - m, z1, hw, wing);
+            tree(x1 - m / 2, z0 + m / 2, r >> 3);
+            tree(x0 + m / 2, z1 - m / 2, r >> 5);
+        }
+        break;
+    }
+    case LOT_ROWS:
+        for (s32 i = 0; i < 9; i++) {
+            u32 t = hash(r + i);
+            s32 px = x0 + (i % 3) * (third + ALLEY), pz = z0 + (i / 3) * (third + ALLEY);
+            add_solid(px, pz, px + third, pz + third, 80 + t % 161, M_BLD0 + (t >> 9) % 6);
+        }
+        break;
+    default: {   // LOT_QUAD, LOT_MIXED
+        s32 open = kind == LOT_MIXED ? (s32)(r >> 28) & 3 : -1;
+        for (s32 i = 0; i < 4; i++) {
+            u32 t = hash(r + i);
+            s32 px = x0 + (i & 1) * (half + ALLEY), pz = z0 + (i >> 1) * (half + ALLEY);
+            if (i == open) {
+                tree(px + half / 3, pz + half / 3, t);
+                tree(px + half * 2 / 3, pz + half * 2 / 3, t >> 7);
+                continue;
+            }
+            add_solid(px, pz, px + half, pz + half, 140 + t % 281, M_BLD0 + (t >> 9) % 6);
+        }
+        break;
+    }
+    }
+}
+
 static void build_city(void)
 {
     for (s32 bz = 0; bz < BLOCKS; bz++)
@@ -84,37 +154,14 @@ static void build_city(void)
             block_first[bz][bx] = solid_count;
             block_count[bz][bx] = 0;
             s32 cx = bx * BLOCK + BLOCK / 2, cz = bz * BLOCK + BLOCK / 2;
-            if (in_park(cx, cz, 0)) {
+            if (park_contains(cx, cz, 0)) {
                 block_kind[bz][bx] = KIND_PARK;
                 continue;
             }
             u32 r = hash(bx * 131 + bz * 7919 + 17);
-            s32 kind = r % 6;
+            s32 kind = lot_kinds[r & 15];
             block_kind[bz][bx] = kind;
-            s32 x0 = bx * BLOCK + ROAD_HALF + 24, x1 = (bx + 1) * BLOCK - ROAD_HALF - 24;
-            s32 z0 = bz * BLOCK + ROAD_HALF + 24, z1 = (bz + 1) * BLOCK - ROAD_HALF - 24;
-            s32 mx = (x0 + x1) / 2, mz = (z0 + z1) / 2;
-            s32 mat = M_BLD0 + (r >> 8) % 6;
-            s32 h = 120 + (r >> 12) % 280;
-            switch (kind) {
-            case 0:   // park with trees
-                add_solid(mx - 90, mz - 90, mx - 50, mz - 50, 70, M_TREE);
-                add_solid(mx + 40, mz + 30, mx + 84, mz + 74, 90, M_TREE);
-                break;
-            case 1: case 2:   // one big building
-                add_solid(x0, z0, x1, z1, h, mat);
-                break;
-            case 3:   // two buildings
-                add_solid(x0, z0, mx - 12, z1, h, mat);
-                add_solid(mx + 12, z0, x1, z1, h / 2 + 60, M_BLD0 + (r >> 20) % 6);
-                break;
-            default:  // four small buildings
-                add_solid(x0, z0, mx - 12, mz - 12, h / 2 + 40, mat);
-                add_solid(mx + 12, z0, x1, mz - 12, h, M_BLD0 + (r >> 18) % 6);
-                add_solid(x0, mz + 12, mx - 12, z1, h / 3 + 60, M_BLD0 + (r >> 22) % 6);
-                add_solid(mx + 12, mz + 12, x1, z1, h / 2 + 80, mat);
-                break;
-            }
+            build_lot(kind, r, bx * BLOCK + ROAD_HALF + WALK, bz * BLOCK + ROAD_HALF + WALK);
             block_count[bz][bx] = solid_count - block_first[bz][bx];
         }
 }
@@ -122,35 +169,42 @@ static void build_city(void)
 static void build_stunts(void)
 {
     // Stunt Park circuit: north up lane A through the loop, round the banked
-    // curve, then south down lane B over the canal jump.
-    add_feature(F_BANK, 0, 1250, 2040, 250, 430, 0, BANK_H);
-    add_feature(F_BANKLEAD, 0, 820, 1700, 1000, 2040, BANK_H, 0);    // lane A, rail on the west
-    add_feature(F_BANKLEAD, 0, 1500, 1740, 1680, 2040, 0, BANK_H);   // lane B, rail on the east
-    add_feature(F_RAMP, 0, 1490, 1520, 1690, 1700, 70, 0);   // kicker, rises toward the canal
-    add_feature(F_WATER, 0, 1100, 1170, PARK_X1, 1500, 0, 0);
-    add_feature(F_RAMP, 0, 1490, 920, 1690, 1170, 0, 60);    // landing ramp
-    add_feature(F_RAMP, 1, 1150, 700, 1330, 860, 0, 40);     // practice kicker, heading +x
+    // curve, then south down lane B over the canal jump. The lead-ins run
+    // straight off the ends of the bank.
+    add_feature(F_BANK, 0, BANK_X, BANK_Z, BANK_RIN, BANK_ROUT, 0, BANK_H);
+    add_feature(F_BANKLEAD, 0, BANK_X - BANK_ROUT, BANK_Z - 340, BANK_X - BANK_RIN, BANK_Z, BANK_H, 0);   // lane A, rail on the west
+    add_feature(F_BANKLEAD, 0, BANK_X + BANK_RIN, BANK_Z - 300, BANK_X + BANK_ROUT, BANK_Z, 0, BANK_H);   // lane B, rail on the east
+    add_feature(F_RAMP, 0, LANE_B_X0, CANAL_Z1 + 20, LANE_B_X1, CANAL_Z1 + 200, 70, 0);   // kicker, rises toward the canal
+    add_feature(F_WATER, 0, PX(700), CANAL_Z0, PARK_X1, CANAL_Z1, 0, 0);
+    add_feature(F_RAMP, 0, LANE_B_X0, LANDING_Z0, LANE_B_X1, CANAL_Z0, 0, 60);   // landing ramp
+    add_feature(F_RAMP, 1, PX(750), START_Z + 53, PX(930), START_Z + 213, 0, 40);   // practice kicker, heading +x
 
-    // Kickers scattered along city streets for free-roam stunts.
-    for (u32 i = 0; i < 24; i++) {
+    // Kickers scattered along city streets for free-roam stunts, one per
+    // street segment at most, in the middle of it. Each sits in the
+    // carriageway that drives up it (traffic keeps right).
+    for (u32 i = 0; i < KICKERS; i++) {
         u32 r = hash(i * 977 + 5);
         s32 line = (1 + r % (BLOCKS - 1)) * BLOCK;
         s32 b = (r >> 8) % BLOCKS;
-        s32 a0 = b * BLOCK + 170, a1 = a0 + 170;
-        s32 up = (r >> 16) & 1;
-        s32 taken = 0;
-        for (s32 j = 0; j < feature_count; j++)
-            if (features[j].type == F_RAMP && features[j].axis == !(i & 1) &&
-                (features[j].axis ? features[j].z0 + 44 : features[j].x0 + 44) == line &&
-                (features[j].axis ? features[j].x0 : features[j].z0) == a0)
+        s32 a0 = b * BLOCK + (BLOCK - 170) / 2, a1 = a0 + 170;
+        s32 up = (r >> 16) & 1;               // rises toward +z (or +x)
+        s32 axis = !(i & 1), taken = 0;
+        // Heading +z the right-hand side is +x; heading +x it is -z.
+        s32 c0 = up != axis ? line + LANE - 44 : line - LANE - 44, c1 = c0 + 88;
+        for (s32 j = 0; j < feature_count; j++) {
+            const Feature *f = &features[j];
+            s32 across = f->axis ? f->z0 + 44 : f->x0 + 44;
+            if (f->type == F_RAMP && f->axis == axis && across - line < ROAD_HALF &&
+                line - across < ROAD_HALF && (f->axis ? f->x0 : f->z0) == a0)
                 taken = 1;
+        }
         if (taken) continue;
-        if (i & 1) {
-            if (in_park(line, (a0 + a1) / 2, 300)) continue;
-            add_feature(F_RAMP, 0, line - 44, a0, line + 44, a1, up ? 0 : 48, up ? 48 : 0);
+        if (axis == 0) {
+            if (park_contains(line, (a0 + a1) / 2, 300)) continue;
+            add_feature(F_RAMP, 0, c0, a0, c1, a1, up ? 0 : 48, up ? 48 : 0);
         } else {
-            if (in_park((a0 + a1) / 2, line, 300)) continue;
-            add_feature(F_RAMP, 1, a0, line - 44, a1, line + 44, up ? 0 : 48, up ? 48 : 0);
+            if (park_contains((a0 + a1) / 2, line, 300)) continue;
+            add_feature(F_RAMP, 1, a0, c0, a1, c1, up ? 0 : 48, up ? 48 : 0);
         }
     }
 }
@@ -165,24 +219,39 @@ static void feature_bounds(const Feature *f, s32 *x0, s32 *z0, s32 *x1, s32 *z1)
     }
 }
 
+// Two passes over the features: count how many touch each block, lay the
+// lists out one after another, then fill them in (in feature order).
 static void index_features(void)
 {
-    s32 refs = 0;
-    const s32 margin = 48;      // covers the car's collision radius near rails
-    for (s32 bz = 0; bz < BLOCKS; bz++)
-        for (s32 bx = 0; bx < BLOCKS; bx++) {
-            cell_first[bz][bx] = refs;
-            for (s32 i = 0; i < feature_count; i++) {
-                s32 x0, z0, x1, z1;
-                feature_bounds(&features[i], &x0, &z0, &x1, &z1);
-                if (x1 + margin < bx * BLOCK || x0 - margin >= (bx + 1) * BLOCK ||
-                    z1 + margin < bz * BLOCK || z0 - margin >= (bz + 1) * BLOCK)
-                    continue;
-                if (refs < MAX_FEAT_REFS) feat_refs[refs++] = i;
-                else world_overflow++;
-            }
-            cell_count[bz][bx] = refs - cell_first[bz][bx];
+    const s32 margin = 80;      // covers the car's and the soft body's reach near rails
+    for (s32 pass = 0; pass < 2; pass++) {
+        if (pass) {
+            s32 refs = 0;
+            for (s32 bz = 0; bz < BLOCKS; bz++)
+                for (s32 bx = 0; bx < BLOCKS; bx++) {
+                    cell_first[bz][bx] = refs;
+                    refs += cell_count[bz][bx];
+                    cell_count[bz][bx] = 0;
+                }
         }
+        for (s32 i = 0; i < feature_count; i++) {
+            s32 x0, z0, x1, z1;
+            feature_bounds(&features[i], &x0, &z0, &x1, &z1);
+            s32 bx0 = (x0 - margin) / BLOCK, bx1 = (x1 + margin) / BLOCK;
+            s32 bz0 = (z0 - margin) / BLOCK, bz1 = (z1 + margin) / BLOCK;
+            if (bx0 < 0) bx0 = 0;
+            if (bz0 < 0) bz0 = 0;
+            if (bx1 > BLOCKS - 1) bx1 = BLOCKS - 1;
+            if (bz1 > BLOCKS - 1) bz1 = BLOCKS - 1;
+            for (s32 bz = bz0; bz <= bz1; bz++)
+                for (s32 bx = bx0; bx <= bx1; bx++) {
+                    if (!pass) { cell_count[bz][bx]++; continue; }
+                    s32 at = cell_first[bz][bx] + cell_count[bz][bx];
+                    if (at < MAX_FEAT_REFS) { feat_refs[at] = i; cell_count[bz][bx]++; }
+                    else world_overflow++;
+                }
+        }
+    }
 }
 
 // Features near (x, z): sets *first to the start of their list in feat_refs.
@@ -296,8 +365,8 @@ s32 world_surface(s32 x, s32 z)
     if (kind == KIND_PARK || lx < ROAD_HALF || lx >= BLOCK - ROAD_HALF ||
         lz < ROAD_HALF || lz >= BLOCK - ROAD_HALF)
         return SURF_ROAD;
-    if (kind == 0 && lx >= ROAD_HALF + 24 && lx < BLOCK - ROAD_HALF - 24 &&
-        lz >= ROAD_HALF + 24 && lz < BLOCK - ROAD_HALF - 24)
+    if (kind == LOT_PLAZA && lx >= ROAD_HALF + WALK && lx < BLOCK - ROAD_HALF - WALK &&
+        lz >= ROAD_HALF + WALK && lz < BLOCK - ROAD_HALF - WALK)
         return SURF_GRASS;
     return SURF_SIDEWALK;
 }
@@ -397,7 +466,7 @@ typedef struct {
     u8 color, flags;
 } WorldFace;
 
-#define MAX_WORLD_FACES 320
+#define MAX_WORLD_FACES 704
 static WorldFace world_faces[MAX_WORLD_FACES] EWRAM_BSS;
 static s32 world_face_count;
 static u16 feat_face_first[MAX_FEATURES + 1] EWRAM_BSS;   // the loop goes last
@@ -525,26 +594,40 @@ static void draw_loop(void)
     }
 }
 
+// A ground rectangle, if any of it can be on screen.
+static inline void ground_rect_vis(s32 x0, s32 z0, s32 x1, s32 z1, u8 color)
+{
+    if (visible((x0 + x1) >> 1, (z0 + z1) >> 1, (x1 - x0 + z1 - z0) >> 1))
+        ground_rect(x0, z0, x1, z1, color);
+}
+
 static void draw_park_ground(void)
 {
     const Loop *l = &the_loop;
     const s32 half = l->width / 2, line = 4;
+    const s32 lead_z = BANK_Z - 340;      // where lane A's lead-in starts
     u8 white = COLOR(M_STUNT_WHITE, 1);
-    // Curbs around the park.
+    // Curbs around the park, in pieces short enough to haze and cull smoothly.
     u8 curb = COLOR(M_SIDEWALK, 0);
-    ground_rect(PARK_X0, PARK_Z0, PARK_X1, PARK_Z0 + 24, curb);
-    ground_rect(PARK_X0, PARK_Z1 - 24, PARK_X1, PARK_Z1, curb);
-    ground_rect(PARK_X0, PARK_Z0, PARK_X0 + 24, PARK_Z1, curb);
-    ground_rect(PARK_X1 - 24, PARK_Z0, PARK_X1, PARK_Z1, curb);
+    const s32 wx = (PARK_X1 - PARK_X0) / 2, wz = (PARK_Z1 - PARK_Z0) / 3;
+    for (s32 i = 0; i < 2; i++) {
+        ground_rect_vis(PARK_X0 + i * wx, PARK_Z0, PARK_X0 + (i + 1) * wx, PARK_Z0 + WALK, curb);
+        ground_rect_vis(PARK_X0 + i * wx, PARK_Z1 - WALK, PARK_X0 + (i + 1) * wx, PARK_Z1, curb);
+    }
+    for (s32 i = 0; i < 3; i++) {
+        ground_rect_vis(PARK_X0, PARK_Z0 + i * wz, PARK_X0 + WALK, PARK_Z0 + (i + 1) * wz, curb);
+        ground_rect_vis(PARK_X1 - WALK, PARK_Z0 + i * wz, PARK_X1, PARK_Z0 + (i + 1) * wz, curb);
+    }
     // Guide lines into and out of the loop.
-    ground_rect(l->x - half - line, PARK_Z0 + 40, l->x - half + line, l->z, white);
-    ground_rect(l->x + half - line, PARK_Z0 + 40, l->x + half + line, l->z, white);
-    ground_rect(l->x + l->shift - half - line, l->z, l->x + l->shift - half + line, 1700, white);
-    ground_rect(l->x + l->shift + half - line, l->z, l->x + l->shift + half + line, 1700, white);
+    ground_rect_vis(l->x - half - line, START_Z - 24, l->x - half + line, l->z, white);
+    ground_rect_vis(l->x + half - line, START_Z - 24, l->x + half + line, l->z, white);
+    ground_rect_vis(l->x + l->shift - half - line, l->z, l->x + l->shift - half + line, lead_z, white);
+    ground_rect_vis(l->x + l->shift + half - line, l->z, l->x + l->shift + half + line, lead_z, white);
     // Start line.
-    for (s32 i = 0; i < 6; i++)
-        ground_rect(l->x - half + i * 14, 640, l->x - half + i * 14 + 14, 654,
-                    (i & 1) ? COLOR(M_SHADOW, 0) : white);
+    if (visible(l->x, START_Z, half))
+        for (s32 i = 0; i < 6; i++)
+            ground_rect(l->x - half + i * 14, START_Z - 7, l->x - half + i * 14 + 14, START_Z + 7,
+                        (i & 1) ? COLOR(M_SHADOW, 0) : white);
 }
 
 static void build_feature_faces(void)
@@ -570,31 +653,52 @@ IWRAM_CODE static void queue_feature(s32 i)
     }
 }
 
-// Sidewalk around whatever stands in the block. Close up, only the strips
-// that can be seen are drawn, not the ground hidden under the buildings.
-IWRAM_CODE static void draw_block_ground(s32 bx, s32 bz, s32 near)
+// The sidewalk and the paved lot as one quad (the buildings stand on it),
+// with a lawn on a plaza.
+IWRAM_CODE static void draw_block_ground(s32 bx, s32 bz)
 {
-    s32 kind = block_kind[bz][bx];
     s32 x0 = bx * BLOCK + ROAD_HALF, x1 = (bx + 1) * BLOCK - ROAD_HALF;
     s32 z0 = bz * BLOCK + ROAD_HALF, z1 = (bz + 1) * BLOCK - ROAD_HALF;
-    s32 ix0 = x0 + 24, ix1 = x1 - 24, iz0 = z0 + 24, iz1 = z1 - 24;
-    u8 walk = COLOR(M_SIDEWALK, 0);
-    if (!near) {
-        ground_rect(x0, z0, x1, z1, walk);
-    } else {
-        ground_rect(x0, z0, x1, iz0, walk);
-        ground_rect(x0, iz1, x1, z1, walk);
-        ground_rect(x0, iz0, ix0, iz1, walk);
-        ground_rect(ix1, iz0, x1, iz1, walk);
-        s32 mx = (ix0 + ix1) / 2, mz = (iz0 + iz1) / 2;
-        if (kind == 3 || kind >= 4)
-            ground_rect(mx - 12, iz0, mx + 12, iz1, walk);
-        if (kind >= 4) {
-            ground_rect(ix0, mz - 12, mx - 12, mz + 12, walk);
-            ground_rect(mx + 12, mz - 12, ix1, mz + 12, walk);
+    ground_rect(x0, z0, x1, z1, COLOR(M_SIDEWALK, 0));
+    if (block_kind[bz][bx] == LOT_PLAZA)
+        ground_rect(x0 + WALK, z0 + WALK, x1 - WALK, z1 - WALK, COLOR(M_GRASS, 0));
+}
+
+// Road markings near the car on the street along x = line (along z when
+// `across` is set): a double centre line and dashed lines between the
+// lanes, painted only between the crossings.
+#define PAINT_REACH 520
+#define PAINT_EDGE  (ROAD_HALF + 24)          // paint stops this far from a crossing's centre
+#define DASH        64
+#define DASH_PERIOD 192
+#define DASH_SKIP   ((BLOCK - 2 * PAINT_EDGE - 3 * DASH_PERIOD - DASH) / 2)   // centres 4 dashes per segment
+
+static void paint_rect(s32 a0, s32 c0, s32 a1, s32 c1, s32 across, u8 color)
+{
+    if (across) ground_rect_vis(a0, c0, a1, c1, color);
+    else        ground_rect_vis(c0, a0, c1, a1, color);
+}
+
+// Thumb code in ROM: only a few calls a frame, and IWRAM is kept for the stack.
+static __attribute__((noinline)) void paint_street(s32 line, s32 focus, s32 across)
+{
+    s32 b0 = (focus - PAINT_REACH) / BLOCK, b1 = (focus + PAINT_REACH) / BLOCK;
+    if (b0 < 0) b0 = 0;
+    if (b1 > BLOCKS - 1) b1 = BLOCKS - 1;
+    u8 yellow = COLOR(M_LINE, 0), white = COLOR(M_STUNT_WHITE, 1);
+    for (s32 b = b0; b <= b1; b++) {
+        s32 s0 = b * BLOCK + PAINT_EDGE, s1 = (b + 1) * BLOCK - PAINT_EDGE;
+        if (s1 < focus - PAINT_REACH || s0 > focus + PAINT_REACH) continue;
+        s32 mid = (s0 + s1) >> 1;
+        if (across ? park_contains(mid, line, ROAD_HALF) : park_contains(line, mid, ROAD_HALF)) continue;
+        paint_rect(s0, line - 8, s1, line - 3, across, yellow);
+        paint_rect(s0, line + 3, s1, line + 8, across, yellow);
+        for (s32 a = s0 + DASH_SKIP; a + DASH <= s1; a += DASH_PERIOD) {
+            if (a + DASH < focus - PAINT_REACH || a > focus + PAINT_REACH) continue;
+            paint_rect(a, line - LANE - 3, a + DASH, line - LANE + 3, across, white);
+            paint_rect(a, line + LANE - 3, a + DASH, line + LANE + 3, across, white);
         }
     }
-    if (kind == 0) ground_rect(ix0, iz0, ix1, iz1, COLOR(M_GRASS, 0));
 }
 
 // Blocks drawn this frame, as (bx, bz) pairs. The scan never reaches
@@ -625,50 +729,46 @@ IWRAM_CODE void world_draw(s32 focus_x, s32 focus_z)
             if (!visible(cx, cz, BLOCK * 3 / 4)) continue;
             shown[shown_count][0] = bx;
             shown[shown_count++][1] = bz;
-            if (block_kind[bz][bx] == KIND_PARK) continue;
-            s32 side;
-            draw_block_ground(bx, bz, r_depth(cx, cz, &side) < 900);
+            if (block_kind[bz][bx] != KIND_PARK) draw_block_ground(bx, bz);
         }
 
-    if (visible((PARK_X0 + PARK_X1) / 2, (PARK_Z0 + PARK_Z1) / 2, 1100)) {
+    if (visible((PARK_X0 + PARK_X1) / 2, (PARK_Z0 + PARK_Z1) / 2,
+                (PARK_X1 - PARK_X0 + PARK_Z1 - PARK_Z0) / 2)) {
         draw_park_ground();
         for (s32 i = 0; i < feature_count; i++) {
             const Feature *f = &features[i];
-            if (f->type == F_WATER && visible((f->x0 + f->x1) / 2, (f->z0 + f->z1) / 2, 500))
-                ground_rect(f->x0, f->z0, f->x1, f->z1, COLOR(M_WATER, 0));
+            if (f->type != F_WATER) continue;
+            // In two halves across, so neither is wider than the haze bands.
+            s32 mx = (f->x0 + f->x1) >> 1;
+            ground_rect_vis(f->x0, f->z0, mx, f->z1, COLOR(M_WATER, 0));
+            ground_rect_vis(mx, f->z0, f->x1, f->z1, COLOR(M_WATER, 0));
         }
     }
 
-    const s32 reach = 520, dash = 40, gap = 88, half_w = 3;
-    for (s32 k = 0; k <= BLOCKS; k++) {
+    for (s32 k = 1; k < BLOCKS; k++) {
         s32 line = k * BLOCK;
-        if (focus_x - line < reach && line - focus_x < reach) {
-            s32 start = ((focus_z - reach) / (dash + gap)) * (dash + gap);
-            for (s32 z = start; z < focus_z + reach; z += dash + gap) {
-                if (z < 0 || z > WORLD || ((z + dash / 2) % BLOCK) < ROAD_HALF + dash) continue;
-                if (in_park(line, z, ROAD_HALF) || !visible(line, z + dash / 2, dash)) continue;
-                ground_rect(line - half_w, z, line + half_w, z + dash, COLOR(M_LINE, 0));
-            }
-        }
-        if (focus_z - line < reach && line - focus_z < reach) {
-            s32 start = ((focus_x - reach) / (dash + gap)) * (dash + gap);
-            for (s32 x = start; x < focus_x + reach; x += dash + gap) {
-                if (x < 0 || x > WORLD || ((x + dash / 2) % BLOCK) < ROAD_HALF + dash) continue;
-                if (in_park(x, line, ROAD_HALF) || !visible(x + dash / 2, line, dash)) continue;
-                ground_rect(x, line - half_w, x + dash, line + half_w, COLOR(M_LINE, 0));
-            }
-        }
+        if (focus_x - line < PAINT_REACH + ROAD_HALF && line - focus_x < PAINT_REACH + ROAD_HALF)
+            paint_street(line, focus_z, 0);
+        if (focus_z - line < PAINT_REACH + ROAD_HALF && line - focus_z < PAINT_REACH + ROAD_HALF)
+            paint_street(line, focus_x, 1);
     }
 
-    // Stunt features.
-    for (s32 i = 0; i < feature_count; i++) {
-        const Feature *f = &features[i];
-        if (f->type == F_RAMP && visible((f->x0 + f->x1) / 2, (f->z0 + f->z1) / 2, 200))
-            queue_feature(i);
-        else if (f->type == F_BANK && visible(f->x0, f->z0 + f->z1 / 2, f->z1))
-            queue_feature(i);
-        else if (f->type == F_BANKLEAD && visible((f->x0 + f->x1) / 2, (f->z0 + f->z1) / 2, 250))
-            queue_feature(i);
+    // Stunt features touching the blocks on show, each once.
+    u32 seen[(MAX_FEATURES + 31) / 32];
+    for (u32 i = 0; i < sizeof(seen) / 4; i++) seen[i] = 0;
+    for (s32 b = 0; b < shown_count; b++) {
+        s32 bx = shown[b][0], bz = shown[b][1];
+        const u8 *list = &feat_refs[cell_first[bz][bx]];
+        for (s32 k = 0, n = cell_count[bz][bx]; k < n; k++) {
+            s32 i = list[k];
+            if (seen[i >> 5] & (1u << (i & 31))) continue;
+            seen[i >> 5] |= 1u << (i & 31);
+            const Feature *f = &features[i];
+            if (f->type == F_BANK ? visible(f->x0, f->z0 + f->z1 / 2, f->z1)
+                                  : visible((f->x0 + f->x1) >> 1, (f->z0 + f->z1) >> 1,
+                                            (f->x1 - f->x0 + f->z1 - f->z0) >> 1))
+                queue_feature(i);
+        }
     }
     if (visible(the_loop.x, the_loop.z, 300))
         queue_feature(feature_count);

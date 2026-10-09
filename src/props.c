@@ -75,17 +75,19 @@ void props_reset(void)
 {
     nprops = smashed = burst = burst_n = burst_timer = 0;
     if (g_track) return;
-    // Stunt Park. A crate pyramid right in front of the start, a cone
-    // slalom beside lane A, drums along the canal and concrete blocks.
-    pyramid(820, 880, 4);
-    for (s32 i = 0; i < 10; i++) add(K_CONE, 700 + ((i & 1) ? 24 : -24), 720 + i * 64, 0, 0);
-    for (s32 i = 0; i < 7; i++) add(K_CONE, 880 + i * 16, 1420, 0, i * 3000);
-    pyramid(1010, 1010, 3);
-    for (s32 i = 0; i < 6; i++) add(K_DRUM, 1180 + i * 15, 1080, 0, i * 9000);
-    for (s32 i = 0; i < 3; i++) add(K_BLOCK, 630 + i * 22, 1580, 0, 0);
-    // Out on the streets: another pyramid and a line of cones.
-    pyramid(BLOCK * 4, 1400, 3);
-    for (s32 i = 0; i < 8; i++) add(K_CONE, 1300 + i * 40, BLOCK * 5, 0, 0);
+    // Stunt Park. A crate pyramid just past the start, beside lane A (crates
+    // pushed all the way up the lane cost the speed the loop needs), a cone
+    // slalom the other side, drums along the canal and concrete blocks.
+    pyramid(LOOP_X + 150, START_Z + 233, 4);
+    for (s32 i = 0; i < 10; i++) add(K_CONE, LOOP_X - 120 + ((i & 1) ? 24 : -24), START_Z + 73 + i * 64, 0, 0);
+    for (s32 i = 0; i < 7; i++) add(K_CONE, LOOP_X + 60 + i * 16, LOOP_Z - 130, 0, i * 3000);
+    pyramid(PX(680), START_Z + 380, 3);
+    for (s32 i = 0; i < 6; i++) add(K_DRUM, PX(780) + i * 15, CANAL_Z0 - 90, 0, i * 9000);
+    for (s32 i = 0; i < 3; i++) add(K_BLOCK, LOOP_X - 190 + i * 22, LOOP_Z + 30, 0, 0);
+    // Out on the streets: another pyramid in a lane, a line of cones along
+    // the street north of the park and drums on a corner of a crossing.
+    pyramid(BLOCK * 4 + LANE / 2, BLOCK * 2 + 700, 3);
+    for (s32 i = 0; i < 8; i++) add(K_CONE, BLOCK + 360 + i * 40, BLOCK * 4 + LANE / 2, 0, 0);
     for (s32 i = 0; i < 4; i++) add(K_DRUM, BLOCK * 6 - 8 + (i & 1) * 15, BLOCK * 4 - 8 + (i >> 1) * 15, 0, i * 7000);
 }
 

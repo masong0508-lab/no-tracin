@@ -1205,7 +1205,7 @@ void sb_step(Car *c, u16 keys)
     // Remember flat, dry spots to come back to.
     if (++safe_timer >= 30) {
         safe_timer = 0;
-        s32 in_park = cx > PARK_X0 && cx < PARK_X1 && cz > PARK_Z0 && cz < PARK_Z1;
+        s32 in_park = park_contains(cx, cz, 0);
         if (!g_track && !in_park && contacts == 4 && ax_u[1] > 15500 && !wheels_off &&
             world_height(cx, cz) == 0 && !world_in_water(cx, cz)) {
             c->safe_x = c->x >> 8;

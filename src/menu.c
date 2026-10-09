@@ -404,8 +404,9 @@ void menu_cheats(void)
 #define SRAM ((volatile u8 *)0x0E000000)
 static const char sram_tag[] __attribute__((used, aligned(4))) = "SRAM_V113";
 
-#define SYS_MAGIC  0x3152544E   // "NTR1"
-#define SLOT_MAGIC 0x3153544E   // "NTS1"
+#define SYS_MAGIC  0x3252544E   // "NTR2": the city at its present size
+#define SYS_OLD    0x3152544E   // "NTR1": the small city; options and stats still count
+#define SLOT_MAGIC 0x3253544E   // "NTS2" (slots saved in the small city are gone)
 #define SLOT_BASE  0x0100
 #define SLOT_SIZE  0x0200
 #define GHOST_BASE 0x0800
@@ -465,13 +466,20 @@ void save_init(void)
     *(volatile u16 *)0x04000204 |= 0x0003;     // SRAM wait states (8 cycles)
     SysSave sv;
     sram_read(0, &sv, sizeof(sv));
-    if (sv.magic != SYS_MAGIC || sv.sum != checksum(&sv, sizeof(sv) - 4)) {
+    if ((sv.magic != SYS_MAGIC && sv.magic != SYS_OLD) || sv.sum != checksum(&sv, sizeof(sv) - 4)) {
         for (s32 i = 0; i < OPT_COUNT; i++) g_opt[i] = 0;
         return;
     }
     for (s32 i = 0; i < OPT_COUNT; i++)
         g_opt[i] = sv.opt[i] < defs[i].count ? sv.opt[i] : 0;
     g_rec = sv.rec;
+    if (sv.magic == SYS_OLD) {
+        // The Stunt Park lap, its ghost and the stars were all somewhere
+        // else in the small city.
+        g_rec.best_steps = 0;
+        g_rec.stars = 0;
+        return;
+    }
     s32 *count, max;
     void *ghost = game_ghost_data(&count, &max);
     if (sv.ghost_count > 0 && sv.ghost_count * 12 <= max) {
@@ -558,7 +566,7 @@ s32 menu_slot(const char *title, s32 saving)
             text(30, y, buf, i == sel ? C_YELLOW : C_WHITE, 1);
             if (!ok[i]) { text(30, y + 9, "EMPTY", C_GREY, 1); continue; }
             s32 x = s[i].car.x >> 8, z = s[i].car.z >> 8;
-            text_r(210, y, x > PARK_X0 && x < PARK_X1 && z > PARK_Z0 && z < PARK_Z1 ? "STUNT PARK" : "CITY", C_CYAN);
+            text_r(210, y, park_contains(x, z, 0) ? "STUNT PARK" : "CITY", C_CYAN);
             p = put(buf, "SCORE ");
             put_num(p, s[i].score);
             text(30, y + 9, buf, C_GREY, 1);

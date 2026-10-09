@@ -327,7 +327,7 @@ static void ground_step(Car *c, u16 keys)
         c->safe_timer = 0;
         s32 sx = nx >> 8, sz = nz >> 8;
         // In the Stunt Park the lap logic picks the restart point.
-        s32 in_park = sx > PARK_X0 && sx < PARK_X1 && sz > PARK_Z0 && sz < PARK_Z1;
+        s32 in_park = park_contains(sx, sz, 0);
         if (!g_track && !in_park && c->mode == CAR_GROUND && hnew == 0 && gx == 0 && gz == 0 &&
             !world_in_water(sx, sz)) {
             c->safe_x = sx;
@@ -392,7 +392,7 @@ static void air_step(Car *c, u16 keys)
 move:;
 
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
-    if (c->y < (400 << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
+    if (c->y < (MAX_BUILDING_H << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
     c->x = nx; c->z = nz;
     c->y += c->vy;
     if (c->mode == CAR_CRASH) return;

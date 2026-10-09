@@ -98,7 +98,7 @@ static void camera_step(CamState *cs, const Car *c, s32 view)
     } else {
         // Pull back and up a little as the speed builds.
         s32 back, height;
-        if (view == VIEW_OVERHEAD)  { back = 210; height = 440; }
+        if (view == VIEW_OVERHEAD)  { back = 300; height = MAX_BUILDING_H + 60; }   // over the rooftops
         else if (view == VIEW_FAR)  { back = 270 + speed / 40; height = 110 + speed / 90; }
         else                        { back = 168 + speed / 50; height = 62 + speed / 140; }
         ex = c->x - ((isin(h) * back) >> 6);
@@ -544,7 +544,7 @@ static s32 play(s32 load_from, s32 track, s32 race_mode)
     game_reset();
     fx_reset();
     if (track >= 0) race_begin(track, race_mode, car);
-    else car_reset(car, the_loop.x, PARK_Z0 + 36, 0);
+    else car_reset(car, the_loop.x, START_Z - 81, 0);     // the whole car behind the start line
     props_reset();
     s32 countdown = 180;
     if (track < 0 && load_from >= 0) {
