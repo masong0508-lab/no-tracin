@@ -28,6 +28,7 @@
 #include "game.h"
 #include "hud.h"
 #include "sound.h"
+#include "tune.h"
 
 s32 car_softbody = 1;
 
@@ -44,15 +45,16 @@ s32 car_softbody = 1;
 #define WHEEL_R  7
 #define DROOP    (5 << 8)           // suspension travel below the design height
 #define BUMP     (4 << 8)           // ... and above it
-#define C_DAMP   420                // Q8: about half of critical
-#define K_ROLL   128                // anti-roll bars, Q8 of the spring rate
+#define C_DAMP   ((420 * tn.damp) >> 8)  // Q8: about half of critical
+#define K_ROLL   tn.roll            // anti-roll bars, Q8 of the spring rate (128)
+#define SUSP_MAX (7 * HUB_M << 15)  // most k + 2c the step holds, Q16 (stock 376000, Jupiter 464000)
 #define NODE_R   (1 << 8)
 #define G        car_g
-#define BRAKE    31
+#define BRAKE    tn.brake           // 31
 #define REV_ACC  10
 #define REV_MAX  (-1024)
-#define A0       16
-#define CRASH_WALL 1700
+#define A0       tn.a0              // 16
+#define CRASH_WALL tn.crash_wall    // 1700
 #define CRUSH    560                // most speed a knock takes off the car in one step: past it, the frame crumples
 #define MAXC     24
 #define VMAX     6000               // fastest any node moves, Q8 per step
@@ -411,10 +413,11 @@ IWRAM_CODE static void solve(s32 passes)
             s32 diff = (s32)(((long long)(l2 - b->r2) * b->inv2r) >> 20);
             if (diff > (b->r >> 2) || diff < -(b->r >> 2)) diff = isqrt(l2) - b->r;
             if (last) {
-                s32 ad = diff < 0 ? -diff : diff;
-                if (ad > b->yield) {
-                    if (b->snaps && ad > b->snap) { b->alive = 0; continue; }
-                    s32 give = (ad - b->yield) >> 1;
+                s32 ad = diff < 0 ? -diff : diff, yl = (b->yield * tn.strength) >> 8;
+                if (ad > yl) {
+                    if (b->snaps && ad > ((b->snap * tn.strength) >> 8)) { b->alive = 0; continue; }
+                    s32 give = ((ad - yl) * tn.crumple) >> 9;
+                    if (give > ad - yl) give = ad - yl;
                     s32 nr = b->r + (diff > 0 ? give : -give);
                     if (nr < (b->r0 * 9) >> 4) nr = (b->r0 * 9) >> 4;
                     if (nr > (b->r0 * 3) >> 1) nr = (b->r0 * 3) >> 1;
@@ -500,7 +503,7 @@ static void add_contact(s32 i, s32 pen, s32 nx, s32 ny, s32 nz)
 // impulse couldn't stop in time is a dent. Returns the hardest hit (Q8).
 static s32 resolve_contacts(void)
 {
-    s32 hit = 0, budget = CRUSH * TOTAL_M;
+    s32 hit = 0, budget = (CRUSH * TOTAL_M * tn.crush) >> 8;
     for (s32 c = 0; c < ncon; c++) {
         Node *n = &nd[cn_i[c]];
         const s32 *nv = cn_n[c];
@@ -512,7 +515,8 @@ static s32 resolve_contacts(void)
         if (vn < -VMAX) vn = -VMAX;
         if (-vn > hit) hit = -vn;
         s32 w = inv_mass(&n->x, nv);
-        s32 jn = ((-vn * 5) << 14) / w;                 // stop it, and bounce back a quarter
+        s32 jn = (nv[1] ? -vn * 5 : (-vn * tn.sb_bounce) / 100) << 14;
+        jn /= w;                                        // stop it, and bounce back a quarter
         if (jn > budget) jn = budget;
         budget -= jn;
         // Scraping along the surface.
@@ -607,8 +611,9 @@ static void set_dent(s32 a, s32 b)
         s32 ex = (q->x - p->x) >> 2, ey = (q->y - p->y) >> 2, ez = (q->z - p->z) >> 2;   // Q6
         if (iabs(ex) > 16000 || iabs(ey) > 16000 || iabs(ez) > 16000) continue;
         s32 l = isqrt((u32)(ex * ex + ey * ey + ez * ez));
-        if (l >= m->r - m->yield) continue;
-        s32 nr = l + m->yield;
+        s32 yl = (m->yield * tn.strength) >> 8;
+        if (l >= m->r - yl) continue;
+        s32 nr = l + yl;
         if (nr < (m->r0 * 9) >> 4) nr = (m->r0 * 9) >> 4;
         dmg += m->r - nr;
         beam_set(m, nr);
@@ -704,26 +709,28 @@ s32 sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass)
     s32 J = 0;
     if (vn > 0) {
         if (vn > VMAX) vn = VMAX;
-        s32 w = inv_mass(bc, bn), wp = 65536 / mass;
-        J = ((vn * 5) << 14) / (w + wp);                // a lively bounce
+        // A heavier car is harder to push (its inverse mass shrinks).
+        s32 w = (inv_mass(bc, bn) * tn.inv_weight) >> 8, wp = 65536 / mass;
+        J = (((vn * (400 + tn.prop_bounce)) / 100) << 14) / (w + wp);   // a lively bounce
         for (s32 k = 0; k < 3; k++) vel[k] += (bn[k] * (J / mass)) >> 14;
         // It's dragged along a little by the body sliding past.
         s32 vt[3];
         for (s32 k = 0; k < 3; k++) vt[k] = rel[k] - ((bn[k] * vn) >> 14);
         for (s32 k = 0; k < 3; k++) vel[k] += vt[k] >> 2;
-        s32 j[3] = { -((bn[0] * J) >> 14), -((bn[1] * J) >> 14), -((bn[2] * J) >> 14) };
+        s32 Jc = (J * tn.inv_weight) >> 8;
+        s32 j[3] = { -((bn[0] * Jc) >> 14), -((bn[1] * Jc) >> 14), -((bn[2] * Jc) >> 14) };
         impulse(j, bc);
         hit_pending = 1;
         if (J > 40 * TOTAL_M) stress = 5;
     }
     // Apart again: the object takes most of the move, the car the rest (a
     // heavy one leaves a dent there).
-    s32 dent = (best * mass) / (mass + TOTAL_M);
+    s32 dent = (best * mass) / (mass + ((TOTAL_M * tn.weight) >> 8));
     for (s32 k = 0; k < 3; k++) pos[k] += (bn[k] * ((best - dent) >> 8)) >> 6;
     // A hard hit on something heavy crumples the body there.
     s32 crush = J / TOTAL_M - 200;
     if (crush > 0) {
-        crush = crush * mass / 4;
+        crush = (crush * mass * tn.crumple) >> 10;
         dent += crush > (10 << 8) ? 10 << 8 : crush;
     }
     s32 crumple = crush > 0 && dent > 64;
@@ -745,7 +752,7 @@ s32 sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass)
 
 static s32 engine_force(s32 v)
 {
-    if (v < car_power / A0) return A0;
+    if (v < tn.v0 || v <= 0) return A0;     // v0 = car_power / A0
     return car_power / v;
 }
 
@@ -757,7 +764,19 @@ static s32 suspension(void)
     // Preloaded springs hold the car at its design height, and twice as
     // stiff as a plain spring that sagged there would be.
     s32 load0 = TOTAL_M * G / 4;
-    s32 k_spring = ((load0 * 2) << 16) / DROOP;
+    s32 k_spring = ((((load0 * 2) << 16) / DROOP) * tn.spring) >> 8;
+    s32 c_damp = C_DAMP, k_roll = K_ROLL;
+    // Stiff springs, hard dampers and heavy gravity together (the physics
+    // lab) can outrun the step and shake the hubs off the road. The step
+    // holds while the stiffest the spring gets (on the bump rubber, with the
+    // anti-roll bar twisted both ways) plus twice the damping, per unit of
+    // hub, stays under 4; keep it under 3.5. No preset gets near at 100%.
+    s32 need = ((k_spring * (5 * 256 + 2 * k_roll)) >> 8) + 512 * c_damp;
+    if (need > SUSP_MAX) {
+        s32 r = (SUSP_MAX << 8) / need;
+        k_spring = (k_spring * r) >> 8;
+        c_damp = (c_damp * r) >> 8;
+    }
     for (s32 w = 0; w < 4; w++) {
         Node *h = &nd[HUB0 + w];
         hub_load[w] = 0;
@@ -788,14 +807,15 @@ static s32 suspension(void)
         else if (l[1] > t[1] + BUMP) d1 = t[1] + BUMP - l[1];
         // A big sideways knock bends the corner; a bigger one tears it off.
         s32 side = iabs(d0) + iabs(d2);
-        if (side > (15 << 8)) {
+        s32 mount = tn.strength < 64 ? 64 : tn.strength;   // how much the corner can take, Q8
+        if (side > 15 * mount) {
             hub_on[w] = 0;
             wheels_off++;
             game_message("WHEEL OFF!", "", PAL_RED, 120);
             sound_play(SFX_CRASH);
             continue;
         }
-        if (side > (4 << 8)) {
+        if (side > 4 * mount) {
             t[0] -= d0 >> 2;
             t[2] -= d2 >> 2;
             toe[w] += (d0 > 0 ? -1 : 1) * (side >> 9);
@@ -806,8 +826,8 @@ static s32 suspension(void)
         // The slider holds the hub under its corner, and the spring pushes
         // it down and the body up; both act on the body as one impulse.
         s32 s = l[1] + d1 - (t[1] - DROOP);
-        s32 f = load0 + (((s - DROOP) * k_spring) >> 16) + (((s - hub_s[w]) * C_DAMP) >> 8);
-        if (hub_on[w ^ 1]) f += (((s - hub_s[w ^ 1]) * k_spring) >> 16) * K_ROLL >> 8;   // anti-roll bar
+        s32 f = load0 + (((s - DROOP) * k_spring) >> 16) + (((s - hub_s[w]) * c_damp) >> 8);
+        if (hub_on[w ^ 1]) f += (((s - hub_s[w ^ 1]) * k_spring) >> 16) * k_roll >> 8;   // anti-roll bar
         if (s > DROOP + BUMP - (3 << 7)) f += ((s - (DROOP + BUMP - (3 << 7))) * k_spring) >> 14;   // bump rubber
         if (s <= 0) f = 0;                                                    // hanging free
         hub_s[w] = s;
@@ -869,7 +889,7 @@ static void tyres(Car *c, u16 keys, s32 vlong)
         if (vt > 16000) vt = 16000; else if (vt < -16000) vt = -16000;
 
         s32 lim = (mu * hub_load[w]) >> 8;
-        if (hand && w >= 2) lim = (lim * 5) >> 3;
+        if (hand && w >= 2) lim = (lim * tn.hand_lim) >> 8;
         s32 L = lim * 4;
         s32 jt = -(vt * stop_t[w]) >> 8, jl;               // what it takes to stop sliding sideways
         if (hand && w >= 2) {
@@ -913,7 +933,7 @@ static void tyres(Car *c, u16 keys, s32 vlong)
 
 static void integrate(void)
 {
-    s32 g = G;
+    s32 g = G, dl = tn.drag_lin;
     for (s32 i = 0; i < NN; i++) {
         Node *n = &nd[i];
         s32 vx = n->x - n->px, vy = n->y - n->py, vz = n->z - n->pz;
@@ -922,9 +942,9 @@ static void integrate(void)
         if (vy > VMAX) vy = VMAX; else if (vy < -VMAX) vy = -VMAX;
         if (vz > VMAX) vz = VMAX; else if (vz < -VMAX) vz = -VMAX;
         n->px = n->x; n->py = n->y; n->pz = n->z;
-        n->x += vx - (vx >> 9);
-        n->y += vy - (vy >> 9) - g;
-        n->z += vz - (vz >> 9);
+        n->x += vx - ((vx * dl) >> 17);
+        n->y += vy - ((vy * dl) >> 17) - g;
+        n->z += vz - ((vz * dl) >> 17);
     }
 }
 
@@ -981,6 +1001,35 @@ static void settle(s32 full)
     }
 }
 
+// Air control, from the physics lab past 100% (the stock soft body has
+// none): up/down pitch, L + left/right roll, B + left/right spin and plain
+// left/right a touch of yaw, each steering the body's turn rate toward the
+// arcade model's trick rates (1.5 times them at 300%).
+static void air_control(u16 keys)
+{
+    s32 lr = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0;
+    s32 ud = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
+    if (!lr && !ud) return;
+    s32 roll_in = (keys & KEY_L) ? lr : 0, spin_in = (keys & KEY_B) ? lr : 0;
+    s32 yaw_in = roll_in || spin_in ? 0 : lr;
+    // The body's turn last step, Q14 radians (as in settle()).
+    s32 w[3] = { 0, 0, 0 };
+    const s32 *a[3] = { prev_r, prev_u, prev_f }, *b[3] = { ax_r, ax_u, ax_f };
+    for (s32 j = 0; j < 3; j++) {
+        w[0] += (a[j][1] * b[j][2] - a[j][2] * b[j][1]) >> 15;
+        w[1] += (a[j][2] * b[j][0] - a[j][0] * b[j][2]) >> 15;
+        w[2] += (a[j][0] * b[j][1] - a[j][1] * b[j][0]) >> 15;
+    }
+    // Wanted rates, Q14 radians per step: nose up about -R, right side down
+    // about -F, turning right about +U.
+    s32 dp = 0, dr = 0, dh = 0;
+    if (ud) dp = (((ud * 1885 * tn.sb_air) >> 8) + dot14(w, ax_r)) / 6;
+    if (roll_in) dr = (((roll_in * 2042 * tn.sb_air) >> 8) + dot14(w, ax_f)) / 6;
+    if (spin_in || yaw_in) dh = ((((spin_in * 452 + yaw_in * 63) * tn.sb_air) >> 8) - dot14(w, ax_u)) / 6;
+    for (s32 k = 0; k < 3; k++)
+        accw[k] += (ax_u[k] * dh - ax_r[k] * dp - ax_f[k] * dr) >> 8;   // Q14 x Q14 >> 8: Q20
+}
+
 // Rotation since last step (Q8 of 1024-unit turns) from how the axes moved.
 static s32 turned(const s32 *a_now, const s32 *b_prev)
 {
@@ -1025,10 +1074,10 @@ void sb_step(Car *c, u16 keys)
     // Steering: less lock at speed.
     s32 sp = iabs(vlong);
     if (sp > 3584) sp = 3584;
-    s32 lock = 60 - (sp * 44) / 3584;
-    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0;
-    if (c->steer < target)      c->steer = c->steer + 6 > target ? target : c->steer + 6;
-    else if (c->steer > target) c->steer = c->steer - 6 < target ? target : c->steer - 6;
+    s32 lock = ((60 - (sp * 44) / 3584) * tn.steer) >> 8;
+    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0, rate = tn.steer_rate;
+    if (c->steer < target)      c->steer = c->steer + rate > target ? target : c->steer + rate;
+    else if (c->steer > target) c->steer = c->steer - rate < target ? target : c->steer - rate;
 
     hub_land = 0;
     s32 contacts = suspension();
@@ -1036,8 +1085,15 @@ void sb_step(Car *c, u16 keys)
 
     // Air drag, nitro, and the hop cheat.
     s32 speed = isqrt((u32)(mv[0] * mv[0]) + (u32)(mv[1] * mv[1]) + (u32)(mv[2] * mv[2]));
-    for (s32 k = 0; k < 3; k++) accv[k] -= RS(mv[k] * speed, 13);
-    if (c->boost) for (s32 k = 0; k < 3; k++) accv[k] += RS(ax_f[k] * 22, 6);
+    for (s32 k = 0; k < 3; k++) accv[k] -= (RS(mv[k] * speed, 13) * tn.drag) >> 8;
+    if (c->boost) for (s32 k = 0; k < 3; k++) accv[k] += RS(ax_f[k] * tn.nitro, 6);
+    if (tn.downforce && contacts) {
+        // Downforce (or lift) with the square of the speed, on the sprung body.
+        s32 v4 = speed >> 4, a = (v4 * v4 * tn.downforce) >> 16;
+        a = a > 512 ? 512 : a < -512 ? -512 : a;
+        for (s32 k = 0; k < 3; k++) accv[k] -= (ax_u[k] * (G * a)) >> 14;
+    }
+    if (tn.sb_air && !contacts) air_control(keys);
     if (cheat_hop && (keys & (KEY_L | KEY_R)) == (KEY_L | KEY_R) && contacts) accv[1] += 900 << 8;
     apply_rigid();
 
@@ -1154,6 +1210,12 @@ void sb_step(Car *c, u16 keys)
     if (!on_ground && !contacts) {
         if (!air) {
             air = 1;
+            if (tn.jump != 256 && mv[1] > 0) {
+                // Jump power: more (or less) of the upward speed off the lip.
+                s32 d = (mv[1] * (tn.jump - 256)) >> 8;
+                for (s32 i = 0; i < NN; i++) if (attached(i)) nd[i].py -= d;
+                c->vy += d;
+            }
             c->air_steps = 0;
             c->trick_p = c->trick_r = c->trick_h = 0;
             launch_x = c->x >> 8;

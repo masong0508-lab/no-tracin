@@ -9,6 +9,7 @@
 #include "game.h"
 #include "hud.h"
 #include "sound.h"
+#include "tune.h"
 
 enum { K_CONE, K_DRUM, K_CRATE, K_BLOCK, K_COUNT };
 enum { POLE, BOX, SLAB };      // tips over and lies down / tumbles / only slides
@@ -48,6 +49,9 @@ static s32 iabs(s32 v) { return v < 0 ? -v : v; }
 static s32 clamp(s32 v, s32 lim) { return v > lim ? lim : v < -lim ? -lim : v; }
 
 s32 props_smashed(void) { return smashed; }
+
+// A kind's weight with the physics lab's PROP WEIGHT slider.
+static s32 mass_of(const Kind *k) { s32 m = (k->mass * tn.prop_m) >> 8; return m > 0 ? m : 1; }
 
 static void add(s32 kind, s32 x, s32 z, s32 y, s32 yaw)
 {
@@ -114,7 +118,7 @@ static void knock(Loose *o, s32 j)
     const Kind *k = &kinds[o->kind];
     o->awake = 1;
     o->still = 0;
-    s32 dv = j / k->mass;
+    s32 dv = j / mass_of(k);
     if (dv <= k->tip) return;
     if (dv > 1500) dv = 1500;
     s32 vx = o->v[0], vz = o->v[2], odd = o->p[0] ^ o->p[2];
@@ -165,7 +169,7 @@ static void bump(Loose *a, Loose *b)
         n[0] = ((dx >> 4) * inv) >> 10; n[1] = 0; n[2] = ((dz >> 4) * inv) >> 10;
         pen = r - (l << 4);
     }
-    s32 ma = ka->mass, mb = kb->mass;
+    s32 ma = mass_of(ka), mb = mass_of(kb);
     s32 rel = ((a->v[0] - b->v[0]) * n[0] + (a->v[1] - b->v[1]) * n[1] + (a->v[2] - b->v[2]) * n[2]) >> 14;
     if (!b->awake) {
         // Something it rests on, or a gentle nudge: it stays put. One resting
@@ -180,7 +184,7 @@ static void bump(Loose *a, Loose *b)
         b->p[k] += (m * wb) >> 8;
     }
     if (rel <= 0) return;
-    s32 dv = rel > 64 ? rel * 3 / 2 : rel;                 // bouncy only when hit hard
+    s32 dv = rel > 64 ? rel * (200 + tn.prop_bounce) / 200 : rel;   // bouncy only when hit hard
     for (s32 k = 0; k < 3; k++) {
         a->v[k] -= (n[k] * ((dv * wa) >> 8)) >> 14;
         b->v[k] += (n[k] * ((dv * wb) >> 8)) >> 14;
@@ -195,7 +199,7 @@ static void bump(Loose *a, Loose *b)
 // The arcade car (no soft body): two balls, nose and tail.
 static s32 hit_arcade(Car *c, Loose *o, const Kind *k)
 {
-    s32 h = c->heading >> 6, fx = isin(h), fz = icos(h), j = 0;
+    s32 h = c->heading >> 6, fx = isin(h), fz = icos(h), j = 0, m = mass_of(k);
     for (s32 s = -1; s <= 1; s += 2) {
         s32 bx = c->x + ((fx * 22 * s) >> 6), bz = c->z + ((fz * 22 * s) >> 6);
         s32 dx = (o->p[0] - bx) >> 4, dz = (o->p[2] - bz) >> 4;
@@ -208,11 +212,12 @@ static s32 hit_arcade(Car *c, Loose *o, const Kind *k)
         o->p[2] += (nz * (rr - l)) >> 10;
         s32 rel = ((c->vx - o->v[0]) * nx + (c->vz - o->v[2]) * nz) >> 14;
         if (rel <= 0) continue;
-        o->v[0] += (nx * rel * 2) >> 14;
-        o->v[2] += (nz * rel * 2) >> 14;
+        s32 kick = rel * (100 + tn.prop_bounce) / 100;   // twice rel at stock bounce
+        o->v[0] += (nx * kick) >> 14;
+        o->v[2] += (nz * kick) >> 14;
         o->v[1] += rel >> 2;
-        j += rel * 2 * k->mass;
-        s32 slow = (rel * 2 * k->mass) / (k->mass + 30);
+        j += rel * 2 * m;
+        s32 slow = (rel * 2 * m) / (m + ((30 * tn.weight) >> 8));   // the car weighs 30
         c->vx -= (nx * slow) >> 14;
         c->vz -= (nz * slow) >> 14;
     }
@@ -230,9 +235,9 @@ void props_step(Car *c)
         // The car.
         if (c->mode != CAR_LOOP && iabs(o->p[0] - c->x) < (64 << 8) && iabs(o->p[2] - c->z) < (64 << 8) &&
             iabs(o->p[1] - c->y) < (56 << 8)) {
-            s32 j = soft ? sb_hit_prop(o->p, o->v, k->radius, k->half_h, k->mass) : hit_arcade(c, o, k);
+            s32 j = soft ? sb_hit_prop(o->p, o->v, k->radius, k->half_h, mass_of(k)) : hit_arcade(c, o, k);
             if (j) {
-                if (j > 160 * k->mass) sound_play(k->mass > 2 ? SFX_CRASH : SFX_LAND);
+                if (j > 160 * mass_of(k)) sound_play(k->mass > 2 ? SFX_CRASH : SFX_LAND);
                 knock(o, j);
             }
         }
@@ -271,12 +276,13 @@ void props_step(Car *c)
         s32 g = world_height(x, z);
         if (o->p[1] - up < g) {
             o->p[1] = g + up;
-            if (o->v[1] < 0) o->v[1] = -(o->v[1] * 3) >> 3;
+            if (o->v[1] < 0) o->v[1] = -(o->v[1] * 3 * tn.prop_bounce) / 800;
             if (o->v[1] < 40) o->v[1] = 0;
             // Sliding to a stop; a drum on its side rolls on.
             s32 roll = o->kind == K_DRUM && o->tilt > 12000;
-            o->v[0] -= o->v[0] >> (roll ? 6 : 3);
-            o->v[2] -= o->v[2] >> (roll ? 6 : 3);
+            s32 fr = tn.prop_fric;                          // 256 at stock
+            o->v[0] -= (o->v[0] * fr) >> (roll ? 14 : 11);
+            o->v[2] -= (o->v[2] * fr) >> (roll ? 14 : 11);
             if (iabs(o->v[0]) < 12 && iabs(o->v[2]) < 12) o->v[0] = o->v[2] = 0;
             o->spin -= o->spin >> 2;
             if (k->shape == POLE) {
@@ -302,8 +308,9 @@ void props_step(Car *c)
             o->p[2] += (wz * pen) >> 6;
             s32 vn = (o->v[0] * wx + o->v[2] * wz) >> 14;
             if (vn < 0) {
-                o->v[0] -= (wx * vn * 3 / 2) >> 14;
-                o->v[2] -= (wz * vn * 3 / 2) >> 14;
+                s32 ex = wx * vn, ez = wz * vn, pb = tn.prop_bounce - 100;   // 1.5 times at stock
+                o->v[0] -= (ex * 3 / 2 + (ex / 200) * pb) >> 14;
+                o->v[2] -= (ez * 3 / 2 + (ez / 200) * pb) >> 14;
             }
         }
         s32 cx = o->p[0] >> 13, cz = o->p[2] >> 13, seen[9], ns = 0;
