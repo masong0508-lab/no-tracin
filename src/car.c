@@ -8,17 +8,18 @@
 #include "world.h"
 #include "track.h"
 #include "softbody.h"
+#include "tune.h"
 
 #define G           car_g     // gravity, Q8 units per step^2 (35 = 2.5 g)
 #define GRIP        car_grip  // max sideways velocity change per step (38 = ~1.1 g)
-#define HAND_GRIP   12      // rear grip with the handbrake on
-#define A0          16      // full-throttle acceleration at low speed
+#define HAND_GRIP   tn.hand_grip  // rear grip with the handbrake on (12)
+#define A0          tn.a0     // full-throttle acceleration at low speed (16)
 #define POWER       car_power // engine power: accel = POWER / speed above A0
-#define BRAKE       31
+#define BRAKE       tn.brake  // 31
 #define REV_ACC     10
 #define REV_MAX     (-1024)
-#define CRASH_WALL  1700    // sideways-into-wall speed that wrecks the car (~45 mph)
-#define CRASH_LAND  1800    // landing impact that wrecks the car
+#define CRASH_WALL  tn.crash_wall   // sideways-into-wall speed that wrecks the car (1700, ~45 mph)
+#define CRASH_LAND  tn.crash_land   // landing impact that wrecks the car (1800)
 #define CAR_R       28      // collision radius
 #define STEP_UP     (10 << 8)
 #define LOOP_ALIGN  4551    // must enter the loop within 25 degrees of straight
@@ -33,9 +34,13 @@ static s32 iabs(s32 v) { return v < 0 ? -v : v; }
 // Body angles are Q8 of 1024-unit turns; this folds one into -half..half a turn.
 static s32 wrap_angle(s32 a) { return (s32)((u32)a << 14) >> 14; }
 
+// Speed for the air drag, held where its square still fits (with the lab's
+// least drag the nitro can run away with the car).
+static s32 drag_v(s32 v) { v = iabs(v); return v > 30000 ? 30000 : v; }
+
 static s32 engine_force(s32 v)
 {
-    if (v < POWER / A0) return A0;
+    if (v < tn.v0 || v <= 0) return A0;     // v0 = POWER / A0
     return POWER / v;
 }
 
@@ -65,8 +70,8 @@ static void gradient(s32 ux, s32 uz, s32 base, s32 *gx, s32 *gz)
 
 static void spring(s32 *a, s32 *v, s32 target)
 {
-    *v += (target - *a) >> 3;
-    *v -= *v >> 2;
+    *v += ((target - *a) * tn.spring) >> 11;
+    *v -= (*v * tn.damp) >> 10;
     *a += *v;
 }
 
@@ -134,11 +139,13 @@ static void collide(Car *c, s32 *nx, s32 *nz, s32 can_crash)
         c->roll_v += vn * 8;
         return;
     }
+    s32 most = vn * 2;              // never thrown back faster than it hit
     if (can_crash && car_crashes && -vn > CRASH_WALL) {
         crash(c, EV_CRASH);
         vn = (vn * 3) / 2;
     }
-    s32 kick = (vn * 13) / 10;     // restitution 0.3
+    s32 kick = (vn * tn.bounce) / 100;   // restitution 0.3 at 130
+    if (kick < most) kick = most;
     c->vx -= (kick * n_x) >> 14;
     c->vz -= (kick * n_z) >> 14;
     c->vx -= c->vx >> 4;            // scraping slows the car
@@ -202,9 +209,9 @@ static void ground_step(Car *c, u16 keys)
     else if (vlong < 0)
         engine = vlong < -3 ? 3 : -vlong;
     along += engine;
-    if (c->boost) along += 22;              // nitro
-    along -= (vlong * iabs(vlong)) >> 21;   // air drag
-    along -= vlong >> 10;                   // rolling resistance
+    if (c->boost) along += tn.nitro;        // nitro
+    along -= (((vlong * drag_v(vlong)) >> 13) * tn.drag) >> 16;   // air drag
+    along -= (vlong * tn.drag_lin) >> 18;   // rolling resistance
     if (g_track && world_surface(ux, uz) == SURF_GRASS)
         along -= vlong >> 6;                // grass off the circuit slows you right down
     vlong += along;
@@ -219,8 +226,15 @@ static void ground_step(Car *c, u16 keys)
     if (!hand) grip -= lon / 3;
     if (world_surface(ux, uz) == SURF_GRASS) grip = (grip * 5) >> 3;
     if (c->load == 0) c->load = 256;
-    grip = (grip * c->load) >> 8;
-    if (grip < 6) grip = 6;
+    s32 tload = c->load;
+    if (tn.downforce) {
+        // Downforce (or lift) builds with the square of the speed.
+        s32 v4 = iabs(vlong) >> 4;
+        tload += (v4 * v4 * tn.downforce) >> 16;
+        tload = tload < 32 ? 32 : tload > 1024 ? 1024 : tload;
+    }
+    grip = (grip * tload) >> 8;
+    if (grip < tn.grip_min) grip = tn.grip_min;
     vlat += alat;
     c->skid = 0;
     if (vlat > grip)       { vlat -= grip; c->skid = 1; }
@@ -232,10 +246,10 @@ static void ground_step(Car *c, u16 keys)
     // Steering: less lock at speed, yaw from the bicycle model.
     s32 sp = iabs(vlong);
     if (sp > 3584) sp = 3584;
-    s32 lock = 60 - (sp * 44) / 3584;
-    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0;
-    if (c->steer < target)      c->steer = c->steer + 6 > target ? target : c->steer + 6;
-    else if (c->steer > target) c->steer = c->steer - 6 < target ? target : c->steer - 6;
+    s32 lock = ((60 - (sp * 44) / 3584) * tn.steer) >> 8;
+    s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0, rate = tn.steer_rate;
+    if (c->steer < target)      c->steer = c->steer + rate > target ? target : c->steer + rate;
+    else if (c->steer > target) c->steer = c->steer - rate < target ? target : c->steer - rate;
     s32 yaw = (vlong * c->steer) >> 8;
     if (c->skid && !hand) yaw = (yaw * 3) >> 2;     // front tyres sliding: understeer
     if (hand && sp > 768)  yaw = (yaw * 3) >> 1;     // handbrake: the tail steps out
@@ -257,7 +271,7 @@ static void ground_step(Car *c, u16 keys)
     s32 sf = (gx * fx + gz * fz) >> 14, sr = (gx * fz - gz * fx) >> 14;
     s32 a_lat = (vlong * yaw) / 10430;
     spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) << 8) + engine * 48);
-    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * 64);
+    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * tn.lean);
 
     // Move, then resolve walls.
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
@@ -303,6 +317,7 @@ static void ground_step(Car *c, u16 keys)
     s32 ballistic = c->y + c->vy - G;
     if (hnew < ballistic - 512) {
         c->vy -= G;
+        if (c->vy > 0) c->vy = (c->vy * tn.jump) >> 8;   // launch speed off the lip
         c->y = ballistic;
         take_off(c);
     } else {
@@ -350,7 +365,7 @@ static void fly(Car *c, u16 keys)
     c->roll += ((lr * (90 << 8)) - c->roll) / 8;
     if (keys & KEY_A) c->fly_v += 24;
     if (keys & KEY_B) c->fly_v -= 40;
-    if (c->boost) c->fly_v += 40;
+    if (c->boost) c->fly_v += tn.nitro_fly;
     c->fly_v -= c->fly_v >> 7;
     if (c->fly_v < 300) c->fly_v = 300;
     s32 h = c->heading >> 6, p = c->pitch >> 8;
@@ -368,12 +383,12 @@ static void air_step(Car *c, u16 keys)
         goto move;
     }
     c->vy -= G;
-    c->vx -= c->vx >> 9;
-    c->vz -= c->vz >> 9;
+    c->vx -= (c->vx * tn.drag_lin) >> 17;
+    c->vz -= (c->vz * tn.drag_lin) >> 17;
     if (c->boost) {
         s32 h0 = c->heading >> 6;
-        c->vx += isin(h0) >> 11;
-        c->vz += icos(h0) >> 11;
+        c->vx += (isin(h0) * tn.nitro_air) >> 19;
+        c->vz += (icos(h0) * tn.nitro_air) >> 19;
     }
 
     // Tricks: up/down flip, L + left/right barrel roll, B + left/right spin.
@@ -381,10 +396,10 @@ static void air_step(Car *c, u16 keys)
     s32 lr = (keys & KEY_RIGHT) ? 1 : (keys & KEY_LEFT) ? -1 : 0;
     s32 ud = (keys & KEY_DOWN) ? 1 : (keys & KEY_UP) ? -1 : 0;
     s32 roll_in = (keys & KEY_L) ? lr : 0, spin_in = (keys & KEY_B) ? lr : 0;
-    if (!roll_in && !spin_in) c->heading += lr * 40;
-    c->air_pv += (ud * 4800 - c->air_pv) / 6;
-    c->air_rv += (roll_in * 5200 - c->air_rv) / 6;
-    c->air_hv += (spin_in * 1150 - c->air_hv) / 6;
+    if (!roll_in && !spin_in) c->heading += lr * tn.air_steer;
+    c->air_pv += (ud * tn.air_p - c->air_pv) / 6;
+    c->air_rv += (roll_in * tn.air_r - c->air_rv) / 6;
+    c->air_hv += (spin_in * tn.air_h - c->air_hv) / 6;
     c->pitch += c->air_pv;  c->trick_p += c->air_pv;
     c->roll += c->air_rv;   c->trick_r += c->air_rv;
     c->heading += c->air_hv; c->trick_h += c->air_hv;
@@ -466,7 +481,7 @@ static void loop_step(Car *c, u16 keys)
     s32 a = -((G * isin(theta)) >> 14);      // gravity along the track
     if (keys & KEY_A)      a += engine_force(v);
     else if (keys & KEY_B) a -= v > 0 ? BRAKE : 0;
-    a -= (v * iabs(v)) >> 21;
+    a -= (((v * drag_v(v)) >> 13) * tn.drag) >> 16;
     v += a;
     c->loop_s += v;
     c->loop_v = v;
@@ -624,8 +639,8 @@ void car_step(Car *c, u16 keys)
     if (c->y > (3000 << 8)) { c->y = 3000 << 8; if (c->vy > 0) c->vy = 0; }
 
     // Suspension travel settles back to rest.
-    c->bob_v -= c->bob >> 3;
-    c->bob_v -= c->bob_v >> 2;
+    c->bob_v -= (c->bob * tn.spring) >> 11;
+    c->bob_v -= (c->bob_v * tn.damp) >> 10;
     c->bob += c->bob_v;
     if (c->bob > (8 << 8)) c->bob = 8 << 8;
     if (c->bob < (-8 << 8)) c->bob = -8 << 8;
