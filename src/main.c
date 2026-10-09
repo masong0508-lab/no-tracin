@@ -98,7 +98,8 @@ static void camera_step(CamState *cs, const Car *c, s32 view)
     } else {
         // Pull back and up a little as the speed builds.
         s32 back, height;
-        if (view == VIEW_OVERHEAD)  { back = 300; height = MAX_BUILDING_H + 60; }   // over the rooftops
+        if (view == VIEW_OVERHEAD && g_track) { back = 210; height = 440; }
+        else if (view == VIEW_OVERHEAD) { back = 300; height = MAX_BUILDING_H + 60; }   // over the city's rooftops
         else if (view == VIEW_FAR)  { back = 270 + speed / 40; height = 110 + speed / 90; }
         else                        { back = 168 + speed / 50; height = 62 + speed / 140; }
         ex = c->x - ((isin(h) * back) >> 6);

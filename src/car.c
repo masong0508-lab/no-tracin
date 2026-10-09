@@ -392,7 +392,7 @@ static void air_step(Car *c, u16 keys)
 move:;
 
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
-    if (c->y < (MAX_BUILDING_H << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
+    if (c->y < ((g_track ? 400 : MAX_BUILDING_H) << 8)) collide(c, &nx, &nz, 1);   // high enough to clear the rooftops
     c->x = nx; c->z = nz;
     c->y += c->vy;
     if (c->mode == CAR_CRASH) return;
