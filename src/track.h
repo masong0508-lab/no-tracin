@@ -33,6 +33,8 @@ typedef struct {
     const u16 *prop_first;
     const u8 *prop_count;
     u16 prop_total;
+    const Prop *marks;        // landmarks, seen from afar
+    u8 mark_count;
     const s16 *water;         // rectangles x0, z0, x1, z1
     u8 water_count;
     u8 laps, start_time, cp_time;   // race length, seconds on the clock

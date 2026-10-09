@@ -36,6 +36,11 @@ VERGE = 160        # grass between the road edge and the barrier (u8)
 KERB_R = 900 * SCALE   # corners tighter than this get kerbs and tyre walls
 STRAIGHT = 4000 * SCALE  # radius recorded for straights (u16)
 MAX_H = 510        # Prop.y2 holds ground height / 2 in a u8
+# Scenery keeps its real size, but the bigger in-fields want more of it:
+# trees, buildings and columns stand DENSITY times as close along the road
+# in a band SPREAD times as deep (the valley walls and rocks hug the road).
+DENSITY = 1.6
+SPREAD = 2.0
 
 # Control-point attributes (apply from this point to the next).
 BRIDGE = 1         # no verge, railings at the road edge, side girders
@@ -218,6 +223,9 @@ COURSES = [BIG_FOREST, BAY_BRIDGE, ACROPOLIS]
 LANDMARK_R = {P_STAND: 330, P_FERRIS: 260, P_TENT: 100, P_TOWER: 40, P_TEMPLE: 300,
               P_CRANE: 335, P_LIGHTHOUSE: 60, P_BALLOON: 100, P_HOUSE: 80, P_SIGN: 120,
               P_BOAT: 100, P_COASTER: 545}
+# Landmarks the game draws from afar, from a list of their own (the rest of
+# the scenery goes in the grid and is only drawn close by).
+BIG = {P_STAND, P_FERRIS, P_TOWER, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_COASTER}
 # Grandstands stand back from their spot and signs run along the road,
 # facing it, and the cranes' jibs reach back over the water: only this
 # much of one reaches toward the road.
@@ -386,6 +394,9 @@ def place_scenery(course, rec, seed):
     pts = course["points"]
     n = len(rec)
     for c0, c1, kind, spacing in course["zones"]:
+        hug = kind in (P_CLIFF, P_ROCK)
+        if not hug:
+            spacing /= DENSITY
         idx = [i for i, r in enumerate(rec) if c0 <= r["cp"] < c1]
         dist = 0.0
         for i in idx:
@@ -399,7 +410,7 @@ def place_scenery(course, rec, seed):
                     if kind == P_CLIFF:
                         off = barrier_dist(r) + 75 + rnd.random() * 30
                     else:
-                        off = barrier_dist(r) + 60 + rnd.random() * (260 if kind != P_ROCK else 40)
+                        off = barrier_dist(r) + 60 + rnd.random() * (40 if hug else 260 * SPREAD)
                     along = rnd.random() * r["len"]
                     px = r["x"] + r["ux"] * along + r["uz"] * off * side
                     pz = r["z"] + r["uz"] * along - r["ux"] * off * side
@@ -525,12 +536,15 @@ def emit(courses_built):
         out.append(c_array("u16", f"{pre}_cell_first", first))
         out.append(c_array("u8", f"{pre}_cell_count", count, 32))
         out.append(c_array("u8", f"{pre}_cell_list", flat, 24))
-        sprops, pfirst, pcount = prop_lists(props)
+        marks = [p for p in props if p[0] in BIG]
+        sprops, pfirst, pcount = prop_lists([p for p in props if p[0] not in BIG])
         assert len(sprops) < 65536 and max(pcount) < 256, "prop_first is u16, prop_count u8"
-        out.append(f"static const Prop {pre}_props[{len(sprops)}] = {{")
-        for t, x, z, rot, var in sprops:
-            out.append(f"    {{ {t}, {rot}, {var}, {ground_height(rec, x, z) // 2}, {round(x)}, {round(z)} }},")
-        out.append("};")
+        assert len(marks) < 256, "mark_count is u8"
+        for name, plist in ((f"{pre}_props", sprops), (f"{pre}_marks", marks)):
+            out.append(f"static const Prop {name}[{len(plist)}] = {{")
+            for t, x, z, rot, var in plist:
+                out.append(f"    {{ {t}, {rot}, {var}, {ground_height(rec, x, z) // 2}, {round(x)}, {round(z)} }},")
+            out.append("};")
         out.append(c_array("u16", f"{pre}_prop_first", pfirst))
         out.append(c_array("u8", f"{pre}_prop_count", pcount, 32))
         w = course["water"]
@@ -539,6 +553,7 @@ def emit(courses_built):
         out.append(f"#define {pre.upper()}_POINTS {len(rec)}")
         out.append(f"#define {pre.upper()}_LAP {round(total)}")
         out.append(f"#define {pre.upper()}_PROPS {len(sprops)}")
+        out.append(f"#define {pre.upper()}_MARKS {len(marks)}")
         out.append(f"#define {pre.upper()}_WATER {len(w)}")
         out.append(f"#define {pre.upper()}_LAPS {course['laps']}")
         out.append(f"#define {pre.upper()}_START_TIME {course['start_time']}")

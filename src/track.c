@@ -9,13 +9,13 @@
 // Laps and the race clock come from the course definitions in mktracks.py.
 const TrackDef g_tracks[TRACK_COUNT] = {
     { "BIG FOREST", "BEGINNER", bf_pts, BF_POINTS, BF_LAP, bf_cell_first, bf_cell_count, bf_cell_list,
-      bf_props, bf_prop_first, bf_prop_count, BF_PROPS, bf_water, BF_WATER,
+      bf_props, bf_prop_first, bf_prop_count, BF_PROPS, bf_marks, BF_MARKS, bf_water, BF_WATER,
       BF_LAPS, BF_START_TIME, BF_CP_TIME, SCENE_FOREST },
     { "BAY BRIDGE", "MEDIUM", bb_pts, BB_POINTS, BB_LAP, bb_cell_first, bb_cell_count, bb_cell_list,
-      bb_props, bb_prop_first, bb_prop_count, BB_PROPS, bb_water, BB_WATER,
+      bb_props, bb_prop_first, bb_prop_count, BB_PROPS, bb_marks, BB_MARKS, bb_water, BB_WATER,
       BB_LAPS, BB_START_TIME, BB_CP_TIME, SCENE_BAY },
     { "ACROPOLIS", "EXPERT", ac_pts, AC_POINTS, AC_LAP, ac_cell_first, ac_cell_count, ac_cell_list,
-      ac_props, ac_prop_first, ac_prop_count, AC_PROPS, ac_water, AC_WATER,
+      ac_props, ac_prop_first, ac_prop_count, AC_PROPS, ac_marks, AC_MARKS, ac_water, AC_WATER,
       AC_LAPS, AC_START_TIME, AC_CP_TIME, SCENE_MOUNTAINS },
 };
 
@@ -43,9 +43,9 @@ enum {
     P_CLIFF, P_COASTER, P_COUNT
 };
 
-// Landmarks: drawn before the rest of the scenery, and from further off.
-#define BIG_PROPS (1 << P_FERRIS | 1 << P_TEMPLE | 1 << P_STAND | 1 << P_BALLOON | 1 << P_LIGHTHOUSE | \
-                   1 << P_TOWER | 1 << P_COASTER | 1 << P_CRANE)
+// Trees, rocks and the like are drawn out to this deep (about as many are
+// in view as on the old, smaller courses); landmarks as far as anything.
+#define SMALL_FAR 900
 // How far each landmark reaches from its spot, for culling (mktracks.py
 // keeps the road and the other scenery clear by the same sizes).
 static const u16 prop_reach[P_COUNT] = {
@@ -877,27 +877,31 @@ void track_draw(s32 focus_x, s32 focus_z, s32 frame)
     // Faces: nearest first so the budget goes to what matters.
     for (s32 k = n - 1; k >= 0; k--) draw_segment_faces(vis_seg[k], vis_depth[k]);
 
-    // Scenery near the camera.
-    const s32 range = (r_far + 600) >> TRACK_PCELL_SHIFT;
+    // Landmarks first so trees and rocks can't use up the face budget on them.
+    for (s32 i = 0; i < t->mark_count; i++) {
+        const Prop *p = &t->marks[i];
+        if (!r_visible(p->x, p->z, prop_reach[p->type])) continue;
+        s32 side, d = r_depth(p->x, p->z, &side);
+        draw_prop(p, p->y2 * 2, d, frame);
+    }
+
+    // The rest of the scenery near the camera (within ~400 of the focus).
+    const s32 range = (SMALL_FAR + 600 + (1 << TRACK_PCELL_SHIFT) - 1) >> TRACK_PCELL_SHIFT;
     s32 cx0 = (focus_x >> TRACK_PCELL_SHIFT) - range, cx1 = (focus_x >> TRACK_PCELL_SHIFT) + range;
     s32 cz0 = (focus_z >> TRACK_PCELL_SHIFT) - range, cz1 = (focus_z >> TRACK_PCELL_SHIFT) + range;
     if (cx0 < 0) cx0 = 0;
     if (cz0 < 0) cz0 = 0;
     if (cx1 > TRACK_PGRID - 1) cx1 = TRACK_PGRID - 1;
     if (cz1 > TRACK_PGRID - 1) cz1 = TRACK_PGRID - 1;
-    // Landmarks first so trees and rocks can't use up the face budget on them.
-    for (s32 pass = 0; pass < 2; pass++)
     for (s32 cz = cz0; cz <= cz1; cz++)
         for (s32 cx = cx0; cx <= cx1; cx++) {
             s32 c = cz * TRACK_PGRID + cx;
             s32 first = t->prop_first[c], end = first + t->prop_count[c];
             for (s32 i = first; i < end; i++) {
                 const Prop *p = &t->props[i];
-                s32 big = (BIG_PROPS >> p->type) & 1;
-                if (big != !pass) continue;
-                if (!r_visible(p->x, p->z, big ? prop_reach[p->type] : 120)) continue;
+                if (!r_visible(p->x, p->z, 120)) continue;
                 s32 side, d = r_depth(p->x, p->z, &side);
-                if (!big && d > 760) continue;
+                if (d > SMALL_FAR) continue;
                 draw_prop(p, p->y2 * 2, d, frame);
             }
         }
