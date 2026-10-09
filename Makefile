@@ -17,7 +17,7 @@ build/crt0.o: src/crt0.s | build
 build/fill.o: src/fill.s | build
 	$(CC) -mcpu=arm7tdmi -c $< -o $@
 
-build/%.o: src/%.c src/gba.h src/world.h src/car.h src/hud.h src/fx.h src/sound.h src/game.h src/menu.h src/track.h src/race.h src/softbody.h src/props.h src/tracks_data.h | build
+build/%.o: src/%.c src/gba.h src/world.h src/car.h src/hud.h src/fx.h src/sound.h src/game.h src/menu.h src/track.h src/race.h src/softbody.h src/props.h src/tracks_data.h src/tracks_dims.h | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/render.o: src/sintab.h
@@ -32,5 +32,5 @@ clean:
 
 build/track.o: src/tracks_data.h
 
-src/tracks_data.h: tools/mktracks.py
+src/tracks_data.h src/tracks_dims.h &: tools/mktracks.py
 	python3 tools/mktracks.py

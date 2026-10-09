@@ -216,13 +216,16 @@ static void header(volatile u16 *page, const char *title)
     hud_text_centered(9, title, 1, PAL_WHITE);
 }
 
-// Camera gliding along a circuit (title and menu backdrops).
+// Camera gliding along a circuit (title and menu backdrops), FLY_SPEED
+// units a frame. The hints carry over so each lookup only steps ahead.
+#define FLY_SPEED 14
 static void flyover(Camera *cam, s32 t, s32 *focus_x, s32 *focus_z)
 {
-    s32 d = t * 9, x, z, y, h, hint = 0, tx, tz, ty;
-    track_point(d, -60, &x, &z, &y, &h, &hint);
-    track_point(d + 420, 20, &tx, &tz, &ty, &h, &hint);
-    look_at(cam, x << 8, y + (70 << 8), z << 8, tx << 8, ty + (10 << 8), tz << 8);
+    static s32 hint EWRAM_BSS, look_hint EWRAM_BSS;
+    s32 d = t * FLY_SPEED, x, z, y, h, tx, tz, ty;
+    track_point(d, -100, &x, &z, &y, &h, &hint);
+    track_point(d + 600, 30, &tx, &tz, &ty, &h, &look_hint);
+    look_at(cam, x << 8, y + (90 << 8), z << 8, tx << 8, ty + (10 << 8), tz << 8);
     *focus_x = x;
     *focus_z = z;
 }
@@ -338,7 +341,7 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
         }
         // Course map with a dot following the camera, and the course facts.
         box(page, 6, 56, 116, 142, C_PANEL, C_CYAN);
-        track_map(page, *sel, 10, 60, 102, 78, C_WHITE, (*t * 9) % td->lap, C_YELLOW);
+        track_map(page, *sel, 10, 60, 102, 78, C_WHITE, (*t * FLY_SPEED) % td->lap, C_YELLOW);
         box(page, 122, 56, 234, 142, C_PANEL, C_CYAN);
         char buf[24], *q;
         hud_text(130, 62, td->level, 0, level_pal[*sel]);

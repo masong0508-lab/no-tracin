@@ -5,9 +5,8 @@
 #define TRACK_H
 
 #include "gba.h"
+#include "tracks_dims.h"      // TRACK_HALF_W, TRACK_WORLD and the grids (from tools/mktracks.py)
 
-#define TRACK_HALF_W 84       // half the road width
-#define TRACK_WORLD  8192     // circuits lie inside 0..TRACK_WORLD on x and z
 #define TRACK_COUNT  3
 
 // One sample along the centreline; the road runs from this point to the next.
@@ -28,12 +27,14 @@ typedef struct {
     const char *name, *level;
     const TrackPt *pts;
     u16 count, lap;           // points, lap length in world units
-    const u16 *cell_first;    // nearest-road grid, 64 x 64 cells of 128 units
+    const u16 *cell_first;    // nearest-road grid, TRACK_GRID cells across
     const u8 *cell_count, *cell_list;
-    const Prop *props;        // scenery, sorted into 16 x 16 cells of 512 units
+    const Prop *props;        // scenery, sorted into TRACK_PGRID x TRACK_PGRID cells
     const u16 *prop_first;
     const u8 *prop_count;
     u16 prop_total;
+    const Prop *marks;        // landmarks, seen from afar
+    u8 mark_count;
     const s16 *water;         // rectangles x0, z0, x1, z1
     u8 water_count;
     u8 laps, start_time, cp_time;   // race length, seconds on the clock

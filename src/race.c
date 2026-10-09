@@ -19,6 +19,13 @@ typedef struct {
     s32 x, y, z, heading, pitch;   // pose for drawing and collisions
 } Rival;
 
+// Where the rivals sit across the road (offsets from the centreline).
+#define GRID_LAT   (TRACK_HALF_W * 9 / 20)    // the two columns of the grid
+#define PASS_LAT   (TRACK_HALF_W / 2 + 8)     // pulling out to pass
+#define WANDER_LAT (TRACK_HALF_W / 2 - 4)     // drifting about the road
+#define MAX_LAT    (TRACK_HALF_W - 30)        // shoved toward the edge
+#define GRID_GAP   96                         // between grid slots, staggered left and right
+
 static Rival rivals[RIVALS] EWRAM_BSS;
 static u16 line_speed[256] EWRAM_BSS;       // CPU target speed at each point, Q8 per step
 static u32 rng = 777;
@@ -53,7 +60,7 @@ static char *put_race_time(char *p, s32 steps)
 
 // ---------------------------------------------------------------- records
 
-#define REC_MAGIC 0x3156544E      // "NTV1"
+#define REC_MAGIC 0x3256544E      // "NTV2": the courses grew, older records don't count
 typedef struct { s32 best_lap[TRACK_COUNT], best_race[TRACK_COUNT]; } RaceRecords;
 static RaceRecords recs;
 
@@ -70,8 +77,8 @@ s32 race_best_time(s32 track) { return recs.best_race[track]; }
 
 static void grid_slot(s32 slot, s32 *d, s32 *lat)
 {
-    *d = -(90 + slot * 64);
-    *lat = (slot & 1) ? 38 : -38;
+    *d = -(90 + slot * GRID_GAP);
+    *lat = (slot & 1) ? GRID_LAT : -GRID_LAT;
 }
 
 // Corner speeds from the radius (what the tyres hold), then braking zones
@@ -79,7 +86,7 @@ static void grid_slot(s32 slot, s32 *d, s32 *lat)
 static void build_line_speed(void)
 {
     const TrackDef *t = g_track;
-    const s32 top = 3250, brake = 22;
+    const s32 top = 3000, brake = 22;
     for (s32 i = 0; i < t->count; i++) {
         s32 v = isqrt(32 * 256 * t->pts[i].radius);
         line_speed[i] = v > top ? top : v;
@@ -153,11 +160,13 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             s32 seg = r->hint + 1 >= t->count ? 0 : r->hint + 1;
             s32 target = (line_speed[seg] * r->skill) >> 8;
             // Rubber band: ease off well ahead of the player, push when behind.
+            // (The gaps are about time: on the big courses the cars go only a
+            // little faster, so the distances grow less than the courses did.)
             s32 gap = (r->s >> 8) - g_race.progress;
             if (g_race.state == RS_RACING) {
-                if (gap > 1800) target = (target * 184) >> 8;
-                else if (gap > 500) target = (target * 212) >> 8;
-                else if (gap < -1500) target = (target * 272) >> 8;
+                if (gap > 2400) target = (target * 184) >> 8;
+                else if (gap > 650) target = (target * 212) >> 8;
+                else if (gap < -2000) target = (target * 272) >> 8;
             }
             // Don't drive into the car ahead in the same lane: slow, then pull out.
             // (Checked every fourth step; the cap it sets holds in between.)
@@ -171,7 +180,7 @@ static void rivals_step(Car *player, s32 started, s32 plat)
                 if (ahead <= 0 || ahead > 150 || iabs(olat - r->lat) > 56) continue;
                 if (ov - 16 < r->cap) r->cap = ov - 16;
                 if (r->timer > 20) r->timer = 20;
-                r->lat_target = olat > 0 ? -44 : 44;
+                r->lat_target = olat > 0 ? -PASS_LAT : PASS_LAT;
             }
             if (target > r->cap) target = r->cap;
             s32 dv = target - r->v;
@@ -180,13 +189,13 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             r->s += r->v;
             if (--r->timer <= 0) {
                 r->timer = 90 + rnd(200);
-                r->lat_target = rnd(81) - 40;
+                r->lat_target = rnd(2 * WANDER_LAT + 1) - WANDER_LAT;
             }
             if (r->lat < r->lat_target) r->lat++;
             else if (r->lat > r->lat_target) r->lat--;
         }
         // Cars well away from the player only need their pose now and then.
-        s32 far = iabs((r->s >> 8) - g_race.progress) > 1400;
+        s32 far = iabs((r->s >> 8) - g_race.progress) > r_far + 300;
         if (!far || ((g_race.total_steps + i) & 3) == 0 || !started) rival_pose(r);
         if (far) continue;
 
@@ -213,7 +222,7 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             if (hit > 120) sound_play(SFX_SCRAPE);
             s32 shove = 6;
             r->lat += r->lat > plat ? shove : -shove;
-            if (r->lat > 70) r->lat = 70; else if (r->lat < -70) r->lat = -70;
+            if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
             r->lat_target = r->lat;
             if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
             else r->v += 40;
@@ -237,7 +246,7 @@ static void rivals_step(Car *player, s32 started, s32 plat)
         // A side hit shoves the rival across the road.
         s32 shove = pen > 8 ? 8 : pen;
         r->lat += r->lat > plat ? shove : -shove;
-        if (r->lat > 70) r->lat = 70; else if (r->lat < -70) r->lat = -70;
+        if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
         r->lat_target = r->lat;
         // Whoever was behind loses a little speed.
         if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
@@ -431,7 +440,7 @@ void race_hud(const Car *car, s32 frame)
 void race_results(void)
 {
     const Race *g = &g_race;
-    static char left[12][16], right[12][16];
+    static char left[12][16] EWRAM_BSS, right[12][16] EWRAM_BSS;
     const char *lp[12], *rp[12];
     u8 hi[12];
     s32 n = 0;

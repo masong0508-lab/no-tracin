@@ -2,15 +2,18 @@
 """Builds src/tracks_data.h: the three Virtua-style circuits.
 
 Each course is a closed Catmull-Rom spline through hand-placed control
-points (x, z, height, attributes), resampled every ~96 world units. The
+points (x, z, height, attributes), resampled every ~STEP world units. The
 layouts are drawn from memory of Virtua Racing's Big Forest, Bay Bridge and
-Acropolis (corner order, hairpins, the bridge, hills and landmarks), scaled
-to fit the GBA engine. Nothing is read from any ROM.
+Acropolis (corner order, hairpins, the bridge, hills and landmarks). The
+control points below are on a 1/SCALE plan; build() blows them up (heights
+by HSCALE) so that a real-sized car (2 m x 4.4 m) sits on a road and in a
+circuit of real proportions. Nothing is read from any ROM.
 
 Also writes the lookup grids the game uses to find the nearest stretch of
-road for any point, and places the scenery.
+road for any point, places the scenery, and writes src/tracks_dims.h with
+the dimensions the C code shares with this script.
 
-    python3 tools/mktracks.py            # writes src/tracks_data.h
+    python3 tools/mktracks.py            # writes src/tracks_data.h and src/tracks_dims.h
     python3 tools/mktracks.py --preview  # also writes build/track_*.png maps
 """
 import math
@@ -18,13 +21,26 @@ import random
 import sys
 import os
 
-STEP = 96          # resample spacing, world units
-CELL = 128         # nearest-road grid
-GRID = 64          # 64 x 64 cells over the 8192-unit world
-PCELL = 512        # scenery grid
-PGRID = 16
-HALF_W = 84        # road half width
-VERGE = 96         # grass between the road edge and the barrier
+SCALE = 2.0        # the plans below are drawn at 1/SCALE (20 world units = 1 m)
+HSCALE = 1.4       # heights grow less than the plan, so the grades get gentler
+STEP = 144         # resample spacing, world units
+CELL_SHIFT = 7     # nearest-road grid: 128-unit cells
+CELL = 1 << CELL_SHIFT
+GRID = 128         # 128 x 128 cells over the world
+WORLD = CELL * GRID   # circuits lie inside 0..WORLD on x and z (16384)
+PCELL_SHIFT = 9    # scenery grid: 512-unit cells
+PCELL = 1 << PCELL_SHIFT
+PGRID = WORLD // PCELL
+HALF_W = 150       # road half width: a 15 m track
+VERGE = 160        # grass between the road edge and the barrier (u8)
+KERB_R = 900 * SCALE   # corners tighter than this get kerbs and tyre walls
+STRAIGHT = 4000 * SCALE  # radius recorded for straights (u16)
+MAX_H = 510        # Prop.y2 holds ground height / 2 in a u8
+# Scenery keeps its real size, but the bigger in-fields want more of it:
+# trees, buildings and columns stand DENSITY times as close along the road
+# in a band SPREAD times as deep (the valley walls and rocks hug the road).
+DENSITY = 1.6
+SPREAD = 2.0
 
 # Control-point attributes (apply from this point to the next).
 BRIDGE = 1         # no verge, railings at the road edge, side girders
@@ -41,10 +57,12 @@ F_KERB_L, F_KERB_R, F_BRIDGE, F_START, F_TUNNEL = 1, 2, 4, 8, 16
 
 # ---------------------------------------------------------------- the courses
 
-# (x, z, height, attr). Clockwise unless noted; heading 0 is +z (north),
-# turning right goes toward +x.
+# (x, z, height, attr) on the 1/SCALE plan (water and landmarks too).
+# Clockwise unless noted; heading 0 is +z (north), turning right goes
+# toward +x. laps, start_time and cp_time set the arcade race: laps, and
+# seconds on the clock at the start and at each checkpoint.
 BIG_FOREST = dict(
-    name="BIG FOREST", start=1, level="BEGINNER", laps=4, start_time=45, cp_time=20,
+    name="BIG FOREST", start=1, level="BEGINNER", laps=3, start_time=55, cp_time=28,
     theme="forest",
     points=[
         (2000, 1700, 0, 0),
@@ -98,7 +116,7 @@ BIG_FOREST = dict(
 )
 
 BAY_BRIDGE = dict(
-    name="BAY BRIDGE", start=1, level="MEDIUM", laps=4, start_time=50, cp_time=22,
+    name="BAY BRIDGE", start=1, level="MEDIUM", laps=3, start_time=48, cp_time=24,
     theme="bay",
     points=[
         (2300, 1500, 0, 0),
@@ -147,7 +165,7 @@ BAY_BRIDGE = dict(
 )
 
 ACROPOLIS = dict(
-    name="ACROPOLIS", start=1, level="EXPERT", laps=4, start_time=55, cp_time=24,
+    name="ACROPOLIS", start=1, level="EXPERT", laps=3, start_time=56, cp_time=30,
     theme="acropolis",
     points=[
         (1800, 1800, 0, 0),
@@ -200,6 +218,29 @@ ACROPOLIS = dict(
 
 COURSES = [BIG_FOREST, BAY_BRIDGE, ACROPOLIS]
 
+# Footprint radius of each landmark as track.c draws it: keeps the scenery
+# and the road clear of it (the game culls with the same sizes).
+LANDMARK_R = {P_STAND: 330, P_FERRIS: 260, P_TENT: 100, P_TOWER: 40, P_TEMPLE: 300,
+              P_CRANE: 335, P_LIGHTHOUSE: 60, P_BALLOON: 100, P_HOUSE: 80, P_SIGN: 120,
+              P_BOAT: 100, P_COASTER: 545}
+# Landmarks the game draws from afar, from a list of their own (the rest of
+# the scenery goes in the grid and is only drawn close by).
+BIG = {P_STAND, P_FERRIS, P_TOWER, P_TEMPLE, P_CRANE, P_LIGHTHOUSE, P_BALLOON, P_COASTER}
+# Grandstands stand back from their spot and signs run along the road,
+# facing it, and the cranes' jibs reach back over the water: only this
+# much of one reaches toward the road.
+LANDMARK_FRONT = {P_STAND: 20, P_SIGN: 10, P_CRANE: 130}
+
+
+def scaled(course):
+    """The course blown up from its plan to the world: control points, water
+    and landmarks by SCALE, heights by HSCALE."""
+    c = dict(course)
+    c["points"] = [(x * SCALE, z * SCALE, y * HSCALE, a) for x, z, y, a in course["points"]]
+    c["water"] = [tuple(round(v * SCALE) for v in w) for w in course["water"]]
+    c["landmarks"] = [(t, round(x * SCALE), round(z * SCALE), rot) for t, x, z, rot in course["landmarks"]]
+    return c
+
 
 # ---------------------------------------------------------------- geometry
 
@@ -215,8 +256,9 @@ def resample(points, start):
     dense = []   # (x, z, y, attr)
     for i in range(n):
         p0, p1, p2, p3 = (points[(i + k) % n] for k in (-1, 0, 1, 2))
-        for s in range(64):
-            t = s / 64
+        subs = int(64 * SCALE)
+        for s in range(subs):
+            t = s / subs
             x = catmull(p0[0], p1[0], p2[0], p3[0], t)
             z = catmull(p0[1], p1[1], p2[1], p3[1], t)
             y = catmull(p0[2], p1[2], p2[2], p3[2], t)
@@ -246,6 +288,7 @@ def heading_of(dx, dz):
 
 
 def build(course, seed):
+    course = scaled(course)
     pts, total = resample(course["points"], course.get("start", 0))
     n = len(pts)
     rec = []
@@ -260,7 +303,7 @@ def build(course, seed):
         h0, h1 = rec[i - 1]["head"], rec[(i + 1) % n]["head"]
         dh = (h1 - h0 + math.pi) % (2 * math.pi) - math.pi
         arc = rec[i - 1]["len"] + rec[i]["len"]
-        rec[i]["radius"] = min(4000, abs(arc / dh) if abs(dh) > 1e-6 else 4000)
+        rec[i]["radius"] = min(STRAIGHT, abs(arc / dh) if abs(dh) > 1e-6 else STRAIGHT)
         rec[i]["turn"] = dh
     # Smooth the radius a little (kerbs on corners, speeds for the CPU cars).
     rad = [r["radius"] for r in rec]
@@ -268,7 +311,7 @@ def build(course, seed):
         rec[i]["radius"] = min(rad[i - 1], rad[i], rad[(i + 1) % n])
     for i, r in enumerate(rec):
         f = 0
-        if r["radius"] < 900:
+        if r["radius"] < KERB_R:
             f |= F_KERB_L | F_KERB_R
         if r["attr"] & BRIDGE:
             f |= F_BRIDGE
@@ -303,11 +346,12 @@ def check_clearance(name, rec):
     """Stretches of road that aren't neighbours along the track must be far
     enough apart that their barriers don't meet."""
     n = len(rec)
+    near = 8 * 96 * SCALE       # along the road, closer than this is the same bend
     worst = 1e9
     for i, r in enumerate(rec):
         for j in range(n):
             gap = min(abs(i - j), n - abs(i - j))
-            if gap < 8:
+            if gap * STEP < near:
                 continue
             d = math.hypot(r["x"] - rec[j]["x"], r["z"] - rec[j]["z"])
             worst = min(worst, d)
@@ -336,7 +380,13 @@ def place_scenery(course, rec, seed):
 
     for t, x, z, rot in course["landmarks"]:
         props.append((t, x, z, rot, 0))
-    occupied = [(p[1], p[2], 260) for p in props]
+        # Landmarks are placed by hand: make sure none stands on the road.
+        d, i = nearest(x, z, rec)
+        room = d - barrier_dist(rec[i]) - LANDMARK_FRONT.get(t, LANDMARK_R[t])
+        if room < 0:
+            print(f"  {course['name']}: landmark {t} at ({x}, {z}) is {-room:.0f} onto the road", file=sys.stderr)
+            sys.exit(1)
+    occupied = [(p[1], p[2], LANDMARK_R[p[0]] + 40) for p in props]
 
     def free(x, z, r):
         return all(math.hypot(x - ox, z - oz) > r + orr for ox, oz, orr in occupied)
@@ -344,6 +394,9 @@ def place_scenery(course, rec, seed):
     pts = course["points"]
     n = len(rec)
     for c0, c1, kind, spacing in course["zones"]:
+        hug = kind in (P_CLIFF, P_ROCK)
+        if not hug:
+            spacing /= DENSITY
         idx = [i for i, r in enumerate(rec) if c0 <= r["cp"] < c1]
         dist = 0.0
         for i in idx:
@@ -357,12 +410,12 @@ def place_scenery(course, rec, seed):
                     if kind == P_CLIFF:
                         off = barrier_dist(r) + 75 + rnd.random() * 30
                     else:
-                        off = barrier_dist(r) + 60 + rnd.random() * (260 if kind != P_ROCK else 40)
+                        off = barrier_dist(r) + 60 + rnd.random() * (40 if hug else 260 * SPREAD)
                     along = rnd.random() * r["len"]
                     px = r["x"] + r["ux"] * along + r["uz"] * off * side
                     pz = r["z"] + r["uz"] * along - r["ux"] * off * side
                     radius = {P_BUILDING: 110, P_HOUSE: 70, P_ROCK: 60, P_COLUMN: 30, P_CLIFF: 20}.get(kind, 40)
-                    if not (300 < px < 7900 and 300 < pz < 7900):
+                    if not (300 < px < WORLD - 300 and 300 < pz < WORLD - 300):
                         continue
                     if not clear(px, pz, radius) or not free(px, pz, radius):
                         continue
@@ -378,7 +431,7 @@ def place_scenery(course, rec, seed):
 # ---------------------------------------------------------------- output
 
 def grid_lists(rec):
-    """For each 256-unit cell, the road segments within reach of it."""
+    """For each CELL-sized cell, the road segments within reach of it."""
     reach = HALF_W + VERGE + 80     # the barriers, plus the car and camera radius
     cells = [[] for _ in range(GRID * GRID)]
     for i, r in enumerate(rec):
@@ -422,7 +475,7 @@ def ground_height(rec, x, z):
     edge = barrier_dist(r)
     if d > edge:
         h = 0 if r["flags"] & F_BRIDGE else max(0.0, h - (d - edge))
-    return int(min(510, max(0, h)))
+    return int(min(MAX_H, max(0, h)))
 
 
 def c_array(ctype, name, values, per_line=16):
@@ -433,11 +486,40 @@ def c_array(ctype, name, values, per_line=16):
     return "\n".join(lines)
 
 
+def emit_dims():
+    """The dimensions track.h (and so car.c, race.c, main.c) shares with
+    this script, so the two can't disagree."""
+    assert VERGE <= 255, "TrackPt.verge is a u8"
+    assert WORLD <= 32768, "coordinates are s16"
+    assert PGRID * PCELL == WORLD
+    return "\n".join([
+        "// Generated by tools/mktracks.py. Do not edit by hand.",
+        "// Circuit dimensions shared by the generator and the game.",
+        "#ifndef TRACKS_DIMS_H",
+        "#define TRACKS_DIMS_H",
+        "",
+        f"#define TRACK_HALF_W      {HALF_W}      // half the road width",
+        f"#define TRACK_WORLD       {WORLD}    // circuits lie inside 0..TRACK_WORLD on x and z",
+        f"#define TRACK_CELL_SHIFT  {CELL_SHIFT}        // nearest-road grid: cells of 1 << shift units,",
+        f"#define TRACK_GRID        {GRID}      // TRACK_GRID across",
+        f"#define TRACK_PCELL_SHIFT {PCELL_SHIFT}        // scenery grid: cells of 1 << shift units,",
+        f"#define TRACK_PGRID       {PGRID}       // TRACK_PGRID across",
+        "",
+        "#endif",
+        ""])
+
+
 def emit(courses_built):
     out = ["// Generated by tools/mktracks.py. Do not edit by hand.",
            "// Hand-made circuits in the style of Virtua Racing's three courses.", ""]
     prefixes = ["bf", "bb", "ac"]
     for (course, rec, total, props), pre in zip(courses_built, prefixes):
+        assert len(rec) < 256, "point numbers are u8 (cell lists, MAX_POINTS)"
+        assert total < 65536, "lap and dist are u16"
+        assert max(r["y"] for r in rec) <= MAX_H, "ground heights must fit Prop.y2"
+        assert all(0 <= p[1] < WORLD and 0 <= p[2] < WORLD for p in props), "scenery outside the world"
+        assert all(0 <= r["x"] < WORLD and 0 <= r["z"] < WORLD for r in rec), "road outside the world"
+        assert all(0 <= v <= WORLD for w in course["water"] for v in w), "water outside the world"
         out.append(f"// {course['name']}: {len(rec)} points, lap {total:.0f} units, {len(props)} props")
         out.append(f"static const TrackPt {pre}_pts[{len(rec)}] = {{")
         dist = 0.0
@@ -450,15 +532,19 @@ def emit(courses_built):
             dist += r["len"]
         out.append("};")
         first, count, flat = grid_lists(rec)
+        assert len(flat) < 65536 and max(count) < 256, "cell_first is u16, cell_count u8"
         out.append(c_array("u16", f"{pre}_cell_first", first))
         out.append(c_array("u8", f"{pre}_cell_count", count, 32))
-        assert len(rec) < 256, "cell lists hold u8 point numbers"
         out.append(c_array("u8", f"{pre}_cell_list", flat, 24))
-        sprops, pfirst, pcount = prop_lists(props)
-        out.append(f"static const Prop {pre}_props[{len(sprops)}] = {{")
-        for t, x, z, rot, var in sprops:
-            out.append(f"    {{ {t}, {rot}, {var}, {ground_height(rec, x, z) // 2}, {round(x)}, {round(z)} }},")
-        out.append("};")
+        marks = [p for p in props if p[0] in BIG]
+        sprops, pfirst, pcount = prop_lists([p for p in props if p[0] not in BIG])
+        assert len(sprops) < 65536 and max(pcount) < 256, "prop_first is u16, prop_count u8"
+        assert len(marks) < 256, "mark_count is u8"
+        for name, plist in ((f"{pre}_props", sprops), (f"{pre}_marks", marks)):
+            out.append(f"static const Prop {name}[{len(plist)}] = {{")
+            for t, x, z, rot, var in plist:
+                out.append(f"    {{ {t}, {rot}, {var}, {ground_height(rec, x, z) // 2}, {round(x)}, {round(z)} }},")
+            out.append("};")
         out.append(c_array("u16", f"{pre}_prop_first", pfirst))
         out.append(c_array("u8", f"{pre}_prop_count", pcount, 32))
         w = course["water"]
@@ -467,7 +553,11 @@ def emit(courses_built):
         out.append(f"#define {pre.upper()}_POINTS {len(rec)}")
         out.append(f"#define {pre.upper()}_LAP {round(total)}")
         out.append(f"#define {pre.upper()}_PROPS {len(sprops)}")
+        out.append(f"#define {pre.upper()}_MARKS {len(marks)}")
         out.append(f"#define {pre.upper()}_WATER {len(w)}")
+        out.append(f"#define {pre.upper()}_LAPS {course['laps']}")
+        out.append(f"#define {pre.upper()}_START_TIME {course['start_time']}")
+        out.append(f"#define {pre.upper()}_CP_TIME {course['cp_time']}")
         out.append("")
     return "\n".join(out) + "\n"
 
@@ -476,7 +566,7 @@ def preview(course, rec, props, path):
     from PIL import Image, ImageDraw
     img = Image.new("RGB", (820, 820), (40, 90, 40))
     d = ImageDraw.Draw(img)
-    s = 0.1
+    s = 820 / WORLD
     for x0, z0, x1, z1 in course["water"]:
         d.rectangle([x0 * s, 820 - z1 * s, x1 * s, 820 - z0 * s], fill=(40, 80, 180))
     n = len(rec)
@@ -506,12 +596,15 @@ def main():
     for k, c in enumerate(COURSES):
         rec, total, props = build(c, 1000 + k)
         print(f"{c['name']}: {len(rec)} points, lap {total:.0f}, {len(props)} props", file=sys.stderr)
+        c = scaled(c)
         built.append((c, rec, total, props))
         if "--preview" in sys.argv:
             os.makedirs(os.path.join(root, "build"), exist_ok=True)
             preview(c, rec, props, os.path.join(root, "build", f"track_{k}.png"))
     with open(os.path.join(root, "src", "tracks_data.h"), "w") as f:
         f.write(emit(built))
+    with open(os.path.join(root, "src", "tracks_dims.h"), "w") as f:
+        f.write(emit_dims())
 
 
 if __name__ == "__main__":
