@@ -431,7 +431,7 @@ void race_hud(const Car *car, s32 frame)
 void race_results(void)
 {
     const Race *g = &g_race;
-    static char left[12][16], right[12][16];
+    static char left[12][16] EWRAM_BSS, right[12][16] EWRAM_BSS;
     const char *lp[12], *rp[12];
     u8 hi[12];
     s32 n = 0;

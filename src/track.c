@@ -22,12 +22,12 @@ const TrackDef *g_track;
 #define BANK       2        // embankments fall 1 unit for every 1 outward
 
 static s16 nrx[MAX_POINTS] EWRAM_BSS, nrz[MAX_POINTS] EWRAM_BSS;   // right-pointing normal at each point, Q14
-static u8  tower_at[MAX_POINTS] EWRAM_BSS;
+static u8  tower_at[MAX_POINTS] EWRAM_BSS;     // bridge towers stand at these points
 static u16 inv_len[MAX_POINTS] EWRAM_BSS;      // 65536 / length of each stretch
 s16 track_pitch[MAX_POINTS] EWRAM_BSS;         // slope of each stretch, 1024-unit angle
 // Bounding circles of runs of 8 points, to skip whole stretches off screen.
 #define BLOCK_PTS 8
-static s16 blk_x[MAX_POINTS / BLOCK_PTS], blk_z[MAX_POINTS / BLOCK_PTS], blk_r[MAX_POINTS / BLOCK_PTS];              // bridge towers stand at these points
+static s16 blk_x[MAX_POINTS / BLOCK_PTS] EWRAM_BSS, blk_z[MAX_POINTS / BLOCK_PTS] EWRAM_BSS, blk_r[MAX_POINTS / BLOCK_PTS] EWRAM_BSS;
 
 enum {
     P_TREE, P_PINE, P_BUILDING, P_STAND, P_FERRIS, P_TENT, P_TOWER, P_ROCK,
@@ -548,8 +548,8 @@ static inline void xvert(const XPt *p, s32 off, s32 y, Vec3 *out)
 }
 
 #define MAX_VIS 96
-static u8  vis_seg[MAX_VIS];
-static s16 vis_depth[MAX_VIS];
+static u8  vis_seg[MAX_VIS] EWRAM_BSS;
+static s16 vis_depth[MAX_VIS] EWRAM_BSS;
 
 // Edge points of point i at lateral offset `off` (+ = right).
 #define EX(i, off) (pts[i].x + ((nrx[i] * (off)) >> 14))
