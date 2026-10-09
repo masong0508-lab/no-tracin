@@ -62,7 +62,8 @@ u16 paint_color(s32 frame)
 
 void options_apply(void)
 {
-    static const s16 grav[3] = { 35, 13, 54 }, power[3] = { 28000, 40000, 64000 }, grip[3] = { 38, 56, 13 };
+    static const s16 grav[3] = { 35, 13, 54 }, grip[3] = { 38, 56, 13 };
+    static const s32 power[3] = { 28000, 40000, 64000 };     // past s16: TUNED and ROCKET wrapped negative
     car_g = grav[g_opt[OPT_GRAVITY]];
     car_power = power[g_opt[OPT_ENGINE]];
     car_grip = grip[g_opt[OPT_TYRES]];
