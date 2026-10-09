@@ -74,9 +74,9 @@ enum {
 // while frames run long and goes back out toward the maximum when there is
 // room. The haze starts at fog1 and is deep from fog2.
 #define FAR_MIN_CITY   1100
-#define FAR_MAX_CITY   1500
-#define FOG1_CITY      620
-#define FOG2_CITY      1020
+#define FAR_MAX_CITY   1700
+#define FOG1_CITY      680
+#define FOG2_CITY      1060
 #define FAR_MIN_TRACK  950
 #define FAR_MAX_TRACK  1500
 #define FOG1_TRACK     620
