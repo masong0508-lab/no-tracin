@@ -36,6 +36,15 @@ typedef struct {
     s32 load;               // tyre load, 256 = resting (light over crests)
 } Car;
 
+// Playable handling profiles. HARD/RACE STYLE are independent original-code
+// recreations, NOT extracted Atari Hard Drivin'/Race Drivin' routines.
+enum {
+    CAR_PHYS_SOFT_BODY, CAR_PHYS_ARCADE,
+    CAR_PHYS_HARD_STYLE, CAR_PHYS_RACE_STYLE,
+    CAR_PHYS_COUNT
+};
+extern s32 car_physics_profile;
+
 // Tunables the options menu changes.
 extern s32 car_g, car_grip, car_power, car_crashes;
 extern s32 cheat_fly, cheat_hop, cheat_glitch;

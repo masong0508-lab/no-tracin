@@ -27,6 +27,9 @@
 
 s32 car_g = 35, car_grip = 38, car_power = 28000, car_crashes = 1;
 s32 cheat_fly, cheat_hop, cheat_glitch;
+// Selectable, bounded GBA-native approximations of classic driving behavior.
+// No Atari arcade physics source ROM or machine code has been imported.
+s32 car_physics_profile;
 
 static u32 rng = 12345;
 static s32 rnd(s32 n) { rng = rng * 1103515245 + 12345; return (rng >> 16) % n; }
@@ -183,6 +186,71 @@ static s32 at_loop(const Car *c, s32 z0, s32 nx, s32 nz, s32 vlong)
            iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256;
 }
 
+// Experimental classic car-response modes: a deliberately separate
+// yaw/tyre model so original Soft-Body and Arcade math cannot regress.
+// This is an original approximation, not Atari's TMS34010 physics program.
+// Input/output velocities are Q8 per simulation step; no new allocations.
+static s32 classic_ground_dynamics(Car *c, u16 keys, s32 *vlong, s32 *vlat,
+                                   s32 gravity_lat, s32 engine, s32 x, s32 z)
+{
+    const s32 hard = car_physics_profile == CAR_PHYS_HARD_STYLE;
+    s32 speed = iabs(*vlong);
+    if (speed > 4096) speed = 4096;
+
+    // A speed-dependent wheel angle, with distinctly heavy/light steering.
+    // The old arcade math and its wheel geometry remain unaffected.
+    s32 wheel_lock = (hard ? 50 : 68) -
+                     speed * (hard ? 38 : 44) / 4096;
+    wheel_lock = (wheel_lock * tn.steer) >> 8;
+    s32 desired = (keys & KEY_LEFT) ? -wheel_lock :
+                  (keys & KEY_RIGHT) ? wheel_lock : 0;
+    s32 rate = (tn.steer_rate * (hard ? 2 : 4)) / 3;
+    if (rate < 1) rate = 1;
+    if (c->steer < desired) {
+        c->steer += rate;
+        if (c->steer > desired) c->steer = desired;
+    } else if (c->steer > desired) {
+        c->steer -= rate;
+        if (c->steer < desired) c->steer = desired;
+    }
+
+    // Combined accelerating/braking and cornering cannot exceed tyre grip.
+    // HARD STYLE has weaker transient grip; RACE STYLE has a wider envelope.
+    s32 traction = car_grip * (hard ? 3 : 5) / 4;
+    traction -= iabs(engine) / 5;
+    if (c->boost) traction -= 4;
+    if (keys & KEY_L) traction = tn.hand_grip * (hard ? 2 : 3) / 3;
+    if (g_track && world_surface(x, z) == SURF_GRASS)
+        traction = (traction * 5) / 8;
+    if (!c->load) c->load = 256;
+    traction = (traction * c->load) / 256;
+    if (traction < tn.grip_min) traction = tn.grip_min;
+
+    s32 slide = *vlat + gravity_lat;
+    c->skid = 0;
+    if (slide > traction) { slide -= traction; c->skid = 1; }
+    else if (slide < -traction) { slide += traction; c->skid = 1; }
+    else slide = 0;
+    *vlat = slide;
+    if (c->skid) *vlong -= *vlong / (hard ? 96 : 160);
+    if (keys & KEY_L) *vlong -= *vlong / 128;
+
+    // A bicycle-model requested turn plus rear-slip feedback. A sluggish
+    // body settles over six steps on HARD and three on RACE. Grip loss
+    // reduces nose authority; the handbrake lets the tail rotate more.
+    s32 wanted = (s32)(((long long)*vlong * c->steer) / 256);
+    if (hard) wanted = wanted * 3 / 4;
+    if (c->skid && !(keys & KEY_L)) wanted = wanted * 3 / 4;
+    if ((keys & KEY_L) && speed > 768) wanted = wanted * 5 / 4;
+    s32 slip_yaw = slide / (hard ? 7 : 5);
+    if (slip_yaw > 120) slip_yaw = 120;
+    if (slip_yaw < -120) slip_yaw = -120;
+    wanted += slip_yaw;
+    c->yaw_v += (wanted - c->yaw_v) / (hard ? 6 : 3);
+    c->heading += c->yaw_v;
+    return c->yaw_v;
+}
+
 static void ground_step(Car *c, u16 keys)
 {
     s32 h = c->heading >> 6;
@@ -218,6 +286,11 @@ static void ground_step(Car *c, u16 keys)
         along -= vlong >> 6;                // grass off the circuit slows you right down
     vlong += along;
 
+    s32 yaw;
+    if (car_physics_profile == CAR_PHYS_HARD_STYLE ||
+        car_physics_profile == CAR_PHYS_RACE_STYLE) {
+        yaw = classic_ground_dynamics(c, keys, &vlong, &vlat, alat, engine, ux, uz);
+    } else {
     // Tyres cancel sideways motion up to their grip; beyond that the car slides.
     // Grip shrinks when the tyres are also braking or driving hard (so trail
     // braking or flooring it mid-corner can break traction), on grass, and when
@@ -252,7 +325,7 @@ static void ground_step(Car *c, u16 keys)
     s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0, rate = tn.steer_rate;
     if (c->steer < target)      c->steer = c->steer + rate > target ? target : c->steer + rate;
     else if (c->steer > target) c->steer = c->steer - rate < target ? target : c->steer - rate;
-    s32 yaw = (vlong * c->steer) >> 8;
+    yaw = (vlong * c->steer) >> 8;
     if (c->skid && !hand) yaw = (yaw * 3) >> 2;     // front tyres sliding: understeer
     if (hand && sp > 768)  yaw = (yaw * 3) >> 1;     // handbrake: the tail steps out
     // Weight transfer: braking loads the nose so it bites and the tail goes
@@ -265,6 +338,8 @@ static void ground_step(Car *c, u16 keys)
     s32 align = vlat / 4;                            // a sliding car swings toward its path
     yaw += align > 200 ? 200 : align < -200 ? -200 : align;
     c->heading += yaw;
+
+    }
 
     c->vx = (vlong * fx + vlat * fz) >> 14;
     c->vz = (vlong * fz - vlat * fx) >> 14;

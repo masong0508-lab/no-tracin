@@ -30,7 +30,7 @@ static const OptDef defs[OPT_COUNT] = {
     [OPT_HUD]      = { "HUD",          2, { "FULL", "CLEAN" } },
     [OPT_SOUND]    = { "SOUND",        3, { "ON", "NO ENGINE", "OFF" } },
     [OPT_AUTOSAVE] = { "AUTOSAVE",     2, { "ON", "OFF" } },
-    [OPT_PHYSICS]  = { "PHYSICS",      2, { "SOFT-BODY", "ARCADE" } },
+    [OPT_PHYSICS]  = { "PHYSICS",      4, { "SOFT-BODY", "ARCADE", "HARD STYLE", "RACE STYLE" } },
 };
 // The order the options menu lists them in.
 static const u8 opt_order[OPT_COUNT] = {
@@ -68,7 +68,10 @@ void options_apply(void)
     car_power = power[g_opt[OPT_ENGINE]];
     car_grip = grip[g_opt[OPT_TYRES]];
     car_crashes = g_opt[OPT_CRASHES] == 0;
-    car_softbody = g_opt[OPT_PHYSICS] == 0;
+    // Existing option slot 14 is preserved in SRAM; only its allowed values
+    // expand. Original physics remain exactly as before for values 0 and 1.
+    car_physics_profile = g_opt[OPT_PHYSICS];
+    car_softbody = car_physics_profile == CAR_PHYS_SOFT_BODY;
     tune_apply();                      // the physics lab's sliders on top of the presets
     g_units_kmh = g_opt[OPT_UNITS];
     r_init_palette(g_opt[OPT_TIME], paint_color(0));

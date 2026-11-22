@@ -242,3 +242,21 @@ Planned next:
 - A Payback-style HUD with hearts, lives and a minimap.
 - Missions with a city map, and save slots for progress.
 - Music.
+
+### Experimental classic driving profiles and upcoming Sega 32X support
+
+**Options → PHYSICS** now offers **SOFT-BODY**, **ARCADE**, **HARD STYLE** and
+**RACE STYLE**. The last two use separate lightweight GBA-native steering,
+slip and yaw response models inspired by early 3D driving simulators. They
+are **not** a port of the original Atari Hard Drivin'/Race Drivin' ROM code;
+that original code has not been recovered. The existing modes and system-save
+layout are unchanged. See [32X and classic physics roadmap](docs/32X_AND_CLASSIC_PHYSICS_ROADMAP.md)
+for proven capabilities and the remaining code-research work.
+
+The supplied Sega Genesis/SVP import and its three original courses remain
+unchanged. The Sega **32X Virtua Racing Deluxe** ROM has not been provided
+or imported yet. When supplied, run the read-only
+`python3 tools/probe_vr_32x.py /path/to/your/rom.32x` to record its exact
+identity without rewriting it. Deluxe's two extra courses, alternate roads,
+three vehicle classes and additional scenery will require a separate
+version-verified importer and updated course-selection data structures.
