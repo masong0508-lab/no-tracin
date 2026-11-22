@@ -1,0 +1,40 @@
+name: Headless GBA emulator smoke test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  headless-mgba:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM toolchain and mGBA 0.10.5
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-arm-none-eabi binutils-arm-none-eabi libmgba-dev
+      - name: Build standard GBA cartridge
+        run: make -j2
+      - name: Compile headless emulator smoke probe
+        run: cc -O2 -std=c99 -Wall tests/gba_emulator_smoke.c -lmgba -lm -o build/gba_emulator_smoke
+      - name: Boot and drive by virtual controller (no RAM writes)
+        run: |
+          set -euo pipefail
+          mkdir -p build/emulator-smoke
+          DRAW=$(arm-none-eabi-nm -g build/notracin.elf | awk '$3=="g_frames" {print $1}')
+          RACE=$(arm-none-eabi-nm -g build/notracin.elf | awk '$3=="g_race" {print $1}')
+          test -n "$DRAW" && test -n "$RACE"
+          build/gba_emulator_smoke notracin.gba "$DRAW" "$RACE" build/emulator-smoke | tee build/emulator-smoke/results.jsonl
+      - name: Publish real emulator captures and telemetry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-headless-mgba-evidence
+          path: build/emulator-smoke/
+          if-no-files-found: warn
+          retention-days: 14
