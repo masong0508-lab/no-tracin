@@ -11,6 +11,8 @@
 
 #define KEY_A 1
 #define KEY_START 8
+#define KEY_RIGHT 16
+#define KEY_L 512
 #define NPIXELS (240 * 160)
 static struct mCore *core;
 static color_t screen[NPIXELS];
@@ -70,13 +72,16 @@ static void status(const char *phase, uint32_t frame_addr, uint32_t race_addr)
 
 int main(int argc, char **argv)
 {
-    if (argc != 5) {
+    if (argc != 5 && argc != 7) {
         fprintf(stderr, "usage: %s game.gba g_frames_hex g_race_hex screenshots_dir\n", argv[0]);
         return 2;
     }
     uint32_t frame_addr = strtoul(argv[2], NULL, 16);
     uint32_t race_addr = strtoul(argv[3], NULL, 16);
     if (!frame_addr || !race_addr) return 2;
+    int original = argc == 7 ? atoi(argv[5]) : 0;
+    int course_index = argc == 7 ? atoi(argv[6]) : 0;
+    if ((original != 0 && original != 1) || course_index < 0 || course_index >= 3) return 2;
     struct mLogger logger = {.log = on_log, .filter = NULL};
     mLogSetDefaultLogger(&logger);
     core = mCoreFind(argv[1]);
@@ -100,8 +105,16 @@ int main(int argc, char **argv)
     run(4, KEY_START); run(60, 0);
     shot(argv[4], "mode"); status("mode", frame_addr, race_addr);
     run(4, KEY_A); run(80, 0);
+    if (original) { run(4, KEY_L); run(30, 0); }
+    for (int i = 0; i < course_index; i++) { run(4, KEY_RIGHT); run(30, 0); }
     shot(argv[4], "course"); status("course", frame_addr, race_addr);
     run(4, KEY_A); run(45, 0);
+    int expected_track = (original ? 3 : 0) + course_index;
+    if ((int32_t)read32(race_addr + 4) != expected_track) {
+        fprintf(stderr, "Wrong selected track: expected %d, got %d\n",
+                expected_track, (int32_t)read32(race_addr + 4));
+        return 1;
+    }
 
     unsigned before_draw = read32(frame_addr);
     int32_t before_progress = (int32_t)read32(race_addr + 12);
