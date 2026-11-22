@@ -8,13 +8,29 @@
 #include "tracks_dims.h"      // TRACK_HALF_W, TRACK_WORLD and the grids (from tools/mktracks.py)
 
 #define TRACKS_PER_SET 3
-enum { TRACK_SET_CUSTOM, TRACK_SET_ORIGINAL };
-#ifdef WITH_VR_ORIGINAL_TRACKS
+enum { TRACK_SET_CUSTOM, TRACK_SET_ORIGINAL, TRACK_SET_VRD };
+#define TRACK_VRD_FIRST 6
+#define TRACK_VRD_COUNT 5
+#ifdef WITH_VRD_32X_TRACKS
+#define TRACK_SET_COUNT 3
+#define TRACK_COUNT (TRACK_VRD_FIRST + TRACK_VRD_COUNT)
+#elif defined(WITH_VR_ORIGINAL_TRACKS)
 #define TRACK_SET_COUNT 2
+#define TRACK_COUNT 6
 #else
 #define TRACK_SET_COUNT 1
+#define TRACK_COUNT 3
 #endif
-#define TRACK_COUNT (TRACKS_PER_SET * TRACK_SET_COUNT)
+// Counts differ only for the new non-competitive 32X studies. Legacy
+// custom/original record banks remain fixed at three entries per set.
+static inline s32 track_set_count(s32 set)
+{
+#ifdef WITH_VRD_32X_TRACKS
+    if (set == TRACK_SET_VRD) return TRACK_VRD_COUNT;
+#endif
+    (void)set;
+    return TRACKS_PER_SET;
+}
 
 // One sample along the centreline; the road runs from this point to the next.
 typedef struct {

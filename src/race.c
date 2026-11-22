@@ -79,7 +79,17 @@ static char *put_race_time(char *p, s32 steps)
 // Keep each bank in the original three-course layout. Installing or removing
 // the optional ROM courses must not resize or overwrite existing custom times.
 typedef struct { s32 best_lap[TRACKS_PER_SET], best_race[TRACKS_PER_SET]; } RaceRecords;
-static RaceRecords recs[TRACK_SET_COUNT];
+// Do not load an unused imported-course SRAM bank in the standard-only ROM.
+// Extra road-study courses keep separate unsaved transient state.
+#ifdef WITH_VR_ORIGINAL_TRACKS
+#define SAVED_RECORD_BANKS 2
+#else
+#define SAVED_RECORD_BANKS 1
+#endif
+static RaceRecords recs[SAVED_RECORD_BANKS];  // unchanged on-disk record layout
+#ifdef WITH_VRD_32X_TRACKS
+static RaceRecords study_recs;  // never saved; route start/finish unverified
+#endif
 
 static u32 records_magic(s32 set)
 {
@@ -99,13 +109,16 @@ static u32 records_address(s32 set)
 static void race_records_save(s32 track)
 {
     if (track < 0 || track >= TRACK_COUNT) return;
+#ifdef WITH_VRD_32X_TRACKS
+    if (track >= TRACK_VRD_FIRST) return;
+#endif
     s32 set = track / TRACKS_PER_SET;
     save_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set]));
 }
 
 void race_records_load(void)
 {
-    for (s32 set = 0; set < TRACK_SET_COUNT; set++) {
+    for (s32 set = 0; set < SAVED_RECORD_BANKS; set++) {
         if (!load_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set])))
             for (s32 i = 0; i < TRACKS_PER_SET; i++)
                 recs[set].best_lap[i] = recs[set].best_race[i] = 0;
@@ -114,10 +127,16 @@ void race_records_load(void)
 
 s32 race_best_lap(s32 track)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    if(track>=TRACK_VRD_FIRST) return 0;
+#endif
     return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_lap[track % TRACKS_PER_SET] : 0;
 }
 s32 race_best_time(s32 track)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    if(track>=TRACK_VRD_FIRST) return 0;
+#endif
     return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_race[track % TRACKS_PER_SET] : 0;
 }
 
@@ -389,7 +408,11 @@ void race_step(Car *player, s32 started)
 {
     Race *g = &g_race;
     const TrackDef *t = g_track;
+#ifdef WITH_VRD_32X_TRACKS
+    RaceRecords *records = g->track>=TRACK_VRD_FIRST ? &study_recs : &recs[g->track / TRACKS_PER_SET];
+#else
     RaceRecords *records = &recs[g->track / TRACKS_PER_SET];
+#endif
     s32 record_index = g->track % TRACKS_PER_SET;
     s32 player_before = g->progress, rival_before[RIVALS];
     s32 x_before = previous_x, z_before = previous_z;
@@ -577,7 +600,16 @@ void race_hud(const Car *car, s32 frame)
 {
     const Race *g = &g_race;
     char buf[24], *p;
-    if (g->mode == RACE_ARCADE) {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = g->track>=TRACK_VRD_FIRST;
+#else
+    s32 study = 0;
+#endif
+    if(study){
+        hud_text(6,3,"32X ROAD STUDY",0,PAL_YELLOW);
+        hud_text_right(236,3,"FREE DRIVE",0,PAL_CYAN);
+        hud_text_right(236,13,"NO LAP RESULTS",0,PAL_WHITE);
+    }else if (g->mode == RACE_ARCADE) {
         hud_text_centered(3, "TIME", 0, PAL_YELLOW);
         s32 secs = (g->time_left + 59) / 60;
         put_num(buf, secs);
@@ -594,6 +626,7 @@ void race_hud(const Car *car, s32 frame)
     } else {
         hud_text(6, 3, "FREE RUN", 0, PAL_YELLOW);
     }
+    if (!study) {
     s32 lap = g->lap + 1 > g->laps ? g->laps : g->lap + 1;
     p = put(buf, "LAP ");
     p = put_num(p, lap);
@@ -607,6 +640,7 @@ void race_hud(const Car *car, s32 frame)
         put_race_time(p, best);
         hud_text_right(236, 23, buf, 0, PAL_CYAN);
     }
+    }
 
     // Speed and revs, bottom right.
     s32 mph = (car_speed(car) * 67) / 2560;
@@ -614,7 +648,7 @@ void race_hud(const Car *car, s32 frame)
     hud_text_right(212, 140, buf, 1, PAL_YELLOW);
     hud_text(216, 146, g_opt[OPT_UNITS] ? "KMH" : "MPH", 0, PAL_YELLOW);
     hud_tach(160, 130, car->rpm);
-    if (g->wrong_way && (frame & 16)) hud_text_centered(98, "WRONG WAY", 1, PAL_RED);
+    if (!study && g->wrong_way && (frame & 16)) hud_text_centered(98, "WRONG WAY", 1, PAL_RED);
 }
 
 // ---------------------------------------------------------------- results

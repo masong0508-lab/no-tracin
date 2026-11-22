@@ -5,6 +5,10 @@
 #include "world.h"
 
 #include "tracks_data.h"
+#ifdef WITH_VRD_32X_TRACKS
+#include "vrd32x_study.h"
+#include "vrd32x_study_tracks.h" // generated only for private 32X build
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
 #include "vr_original.h"
 // Generated from the user's source ROM; absent from normal builds.
@@ -26,12 +30,18 @@ const TrackDef g_tracks[TRACK_COUNT] = {
 #ifdef WITH_VR_ORIGINAL_TRACKS
     VR_ORIGINAL_TRACK_DEFS
 #endif
+#ifdef WITH_VRD_32X_TRACKS
+    VRD32X_STUDY_TRACK_DEFS
+#endif
 };
 
 const TrackDef *g_track;
 
 const char *track_set_name(s32 set)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    if (set == TRACK_SET_VRD) return "32X ROAD STUDIES";
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     if (set == TRACK_SET_ORIGINAL) return "VR ORIGINALS";
 #else
@@ -135,6 +145,13 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
     // Preserve signed truncation without shifting a negative elevation.
     hit->h = p->y * 256 + (s32)((((long long)q->y - p->y) * 256 * hit->along)
                                 / (p->len ? p->len : 1));
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if (study >= 0) {
+        hit->h = vrd32x_study_height(study,x,z);
+        return 1;
+    }
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) hit->h = vr_original_height(original, x, z);
@@ -144,6 +161,10 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
 
 s32 track_height(s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_height(study,x,z);
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) return vr_original_height(original, x, z);
@@ -160,6 +181,14 @@ s32 track_height(s32 x, s32 z)
 
 void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) {
+        s32 h=0;
+        vrd32x_study_ground_plane(study,x,z,8,&h,gx,gz);
+        return;
+    }
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) {
@@ -179,6 +208,10 @@ void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz)
 
 s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_ground_plane(study,x,z,r,h0,gx,gz);
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) return vr_original_ground_plane(original, x, z, r, h0, gx, gz);
@@ -199,6 +232,10 @@ s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
 // its neighbours are tried, which is much cheaper than a full search.
 s32 track_height_near(s32 seg, s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_height(study,x,z);
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) return vr_original_height(original, x, z);
@@ -226,6 +263,10 @@ s32 track_height_near(s32 seg, s32 x, s32 z)
 
 s32 track_surface(s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_surface(study,x,z);
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) return vr_original_surface(original, x, z);
@@ -237,6 +278,10 @@ s32 track_surface(s32 x, s32 z)
 
 s32 track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    // Exploratory drive does not invent walls at as-yet-unverified boundaries.
+    if(vrd32x_study_slot()>=0){*nx=*nz=0;return 0;}
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) return vr_original_collide(original, x, z, radius, nx, nz);
@@ -281,6 +326,10 @@ void track_point(s32 d, s32 lat, s32 *x, s32 *z, s32 *y, s32 *heading, s32 *hint
     *x = p->x + ((p->ux * a) >> 14) + ((rx * lat) >> 14);
     *z = p->z + ((p->uz * a) >> 14) + ((rz * lat) >> 14);
     *y = (p->y * 256) + (((q->y - p->y) * f) >> 8);
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) *y = vrd32x_study_height(study,*x,*z);
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) *y = vr_original_height(original, *x, *z);
@@ -907,6 +956,10 @@ static void draw_segment_faces(s32 a, s32 depth)
 void track_draw(s32 focus_x, s32 focus_z, s32 frame)
 {
     const TrackDef *t = g_track;
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if (study>=0) { vrd32x_study_draw(study,focus_x,focus_z,frame); return; }
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) {
@@ -1012,6 +1065,12 @@ void track_map(volatile u16 *page, s32 index, s32 x0, s32 y0, s32 w, s32 h, u8 c
 {
     if (index < 0 || index >= TRACK_COUNT) return;
     const TrackDef *t = &g_tracks[index];
+#ifdef WITH_VRD_32X_TRACKS
+    if(index>=TRACK_VRD_FIRST){
+        vrd32x_study_map(page,index-TRACK_VRD_FIRST,x0,y0,w,h,color);
+        return;
+    }
+#endif
     s32 minx = 99999, maxx = -1, minz = 99999, maxz = -1;
     for (s32 i = 0; i < t->count; i++) {
         const TrackPt *p = &t->pts[i];

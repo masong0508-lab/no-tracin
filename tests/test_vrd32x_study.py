@@ -1,0 +1,85 @@
+"""Source-only terrain tests for the private 32X road-study renderer.
+
+The fake 8x8 tile is explicitly synthetic: no Sega ROM-derived data is
+shipped to public CI. Test production C height, surface and normal queries.
+"""
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class RoadStudyTerrainTests(unittest.TestCase):
+    def test_height_surface_normal_bounds_and_study_slot(self):
+        cc = shlex.split(os.environ.get('HOST_CC', 'cc'))
+        if not cc or not shutil.which(cc[0]):
+            self.skipTest('C compiler unavailable')
+        with tempfile.TemporaryDirectory(prefix='notracin-vrd-study-') as directory:
+            temp = Path(directory)
+            header = temp / 'gba_host.h'
+            header.write_text((ROOT/'src/gba.h').read_text().replace('target("arm"), ', ''))
+            heights = [10 + 4 * row + 3 * col for row in range(8) for col in range(8)]
+            tile = temp / 'vrd32x_study_data.h'
+            tile.write_text('''// SYNTHETIC ONLY. Sampled genuine source data is never committed.
+static const u16 test_tile[4096] = { [0] = 1 };
+static const u16 test_h[64] = { ''' + ', '.join(map(str, heights)) + ''' };
+static const u16 *const vrd_study_lookups[5] = { test_tile, test_tile, test_tile, test_tile, test_tile };
+static const u16 *const vrd_study_heights[5] = { test_h, test_h, test_h, test_h, test_h };
+''')
+            fixture = temp / 'verify.c'
+            fixture.write_text(r'''
+#include <assert.h>
+#include "track.h"
+#include "world.h"
+#include "vrd32x_study.h"
+const TrackDef g_tracks[TRACK_COUNT] = {0};
+const TrackDef *g_track = 0;
+int main(void) {
+    s32 h=1,gx=1,gz=1;
+    assert(vrd32x_study_slot() == -1);
+    g_track = g_tracks + TRACK_VRD_FIRST;
+    assert(vrd32x_study_slot() == 0);
+    g_track = g_tracks + TRACK_VRD_FIRST + 4;
+    assert(vrd32x_study_slot() == 4);
+    assert(vrd32x_study_height(0,96,96) == 31*256);
+    assert(vrd32x_study_surface(0,96,96) == SURF_ROAD);
+    assert(vrd32x_study_ground_plane(0,96,96,8,&h,&gx,&gz));
+    assert(h == 31*256 && gx == 24 && gz == 32);
+    assert(vrd32x_study_surface(0,260,96) == SURF_GRASS);
+    assert(vrd32x_study_height(0,-32,96) == 0);
+    assert(vrd32x_study_surface(0,16384,96) == SURF_GRASS);
+    h=gx=gz=12345;
+    assert(!vrd32x_study_ground_plane(0,10,10,24,&h,&gx,&gz));
+    assert(h==0 && gx==0 && gz==0);
+    assert(vrd32x_study_surface(5,96,96) == SURF_GRASS);
+    return 0;
+}
+''')
+            cmd = cc + [
+                '-std=c99', '-O2', '-ffunction-sections', '-fdata-sections',
+                '-Wno-pointer-to-int-cast', '-fsanitize=shift,signed-integer-overflow',
+                '-fno-sanitize-recover=all', '-include', str(header),
+                '-DWITH_VR_ORIGINAL_TRACKS', '-DWITH_VRD_32X_TRACKS',
+                '-I', str(temp), '-I', str(ROOT/'src'), '-Wl,--gc-sections',
+                str(fixture), str(ROOT/'src/vrd32x_study.c'), '-o', str(temp/'verify'),
+            ]
+            p = subprocess.run(cmd, text=True, capture_output=True, timeout=30)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            p = subprocess.run([str(temp/'verify')], text=True, capture_output=True, timeout=15)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_optional_import_has_strict_version_gate(self):
+        # Exact verified source identity is required before decoding.
+        code = (ROOT/'tools/import_vrd_32x_explorer.py').read_text()
+        self.assertIn("hashlib.sha256(source).hexdigest()!=ROM_SHA256", code)
+        self.assertIn("'skeleton_cycle_NOT_authentic_start_finish_or_lap'", code)
+        self.assertIn('lap_start_finish_verified=False', code)
+
+
+if __name__ == '__main__':
+    unittest.main()

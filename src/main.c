@@ -325,21 +325,26 @@ static s32 mode_select(s32 *t, s32 *sel)
 // Returns the circuit to race on, or -1 for back.
 static s32 course_select(s32 *t, s32 *sel, s32 mode)
 {
-    static const u8 level_pal[TRACKS_PER_SET] = { PAL_GREEN, PAL_YELLOW, PAL_RED };
+    static const u8 level_pal[TRACK_VRD_COUNT] = { PAL_GREEN, PAL_YELLOW, PAL_RED, PAL_CYAN, PAL_WHITE };
     if (*sel < 0 || *sel >= TRACK_COUNT) *sel = 0;
     u16 prev = ~REG_KEYINPUT;
     for (;;) {
         u16 p = pressed_keys(&prev);
         s32 set = *sel / TRACKS_PER_SET, course = *sel % TRACKS_PER_SET;
+#ifdef WITH_VRD_32X_TRACKS
+        if (*sel >= TRACK_VRD_FIRST){set=TRACK_SET_VRD;course=*sel-TRACK_VRD_FIRST;}
+#endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
         if (p & (KEY_L | KEY_R)) {
             set = (set + 1) % TRACK_SET_COUNT;
+            if(course >= track_set_count(set)) course=0;
             sound_play(SFX_BEEP);
             *t = 0;
         }
 #endif
-        if (p & KEY_LEFT)  { course = (course + TRACKS_PER_SET - 1) % TRACKS_PER_SET; sound_play(SFX_BEEP); *t = 0; }
-        if (p & KEY_RIGHT) { course = (course + 1) % TRACKS_PER_SET; sound_play(SFX_BEEP); *t = 0; }
+        s32 choices=track_set_count(set);
+        if (p & KEY_LEFT)  { course = (course + choices - 1) % choices; sound_play(SFX_BEEP); *t = 0; }
+        if (p & KEY_RIGHT) { course = (course + 1) % choices; sound_play(SFX_BEEP); *t = 0; }
         s32 first = set * TRACKS_PER_SET;
         *sel = first + course;
         if (p & KEY_B) return -1;
@@ -350,18 +355,26 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
         scene_frame(*t);
         volatile u16 *page = back_page();
         hud_begin();
+        #ifdef WITH_VRD_32X_TRACKS
+        header(page,set==TRACK_SET_VRD ? "32X FREE DRIVE" : mode == MODE_ARCADE ? "ARCADE" : "FREE RUN");
+#else
         header(page, mode == MODE_ARCADE ? "ARCADE" : "FREE RUN");
+#endif
         panel(page, 0, 29, SCREEN_W, 40, C_PANEL);
         hud_text_centered(31, track_set_name(set), 0, PAL_CYAN);
 #ifdef WITH_VR_ORIGINAL_TRACKS
         hud_text(10, 31, "L", 0, PAL_YELLOW);
         hud_text_right(230, 31, "R", 0, PAL_YELLOW);
 #endif
-        for (s32 i = 0; i < TRACKS_PER_SET; i++) {
-            s32 x0 = 4 + i * 78, on = i == course;
+        for (s32 i = 0; i < choices; i++) {
+            s32 stride=230/choices, x0=4+i*stride, on=i==course;
             const char *name = g_tracks[first + i].name;
-            box(page, x0, 44, x0 + 76, 60, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
-            hud_text(x0 + 38 - hud_text_width(name, 0) / 2, 49, name, 0,
+#ifdef WITH_VRD_32X_TRACKS
+            char shortname[8];
+            if(set==TRACK_SET_VRD) { shortname[0]='S';shortname[1]='L';shortname[2]='O';shortname[3]='T';shortname[4]=' ';shortname[5]='0'+i;shortname[6]=0; name=shortname; }
+#endif
+            box(page, x0, 44, x0 + stride-2, 60, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
+            hud_text(x0 + stride/2 - hud_text_width(name, 0) / 2, 49, name, 0,
                      on ? PAL_YELLOW : PAL_WHITE);
         }
         // Course map with a dot following the camera, and the course facts.
@@ -370,6 +383,15 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
         box(page, 122, 66, 234, 142, C_PANEL, C_CYAN);
         char buf[24], *q;
         hud_text(130, 72, td->level, 0, level_pal[course]);
+#ifdef WITH_VRD_32X_TRACKS
+        if(set==TRACK_SET_VRD){
+            hud_text(130, 86, "BSP ROAD DATA", 0, PAL_WHITE);
+            hud_text(130, 100, "SAMPLED HEIGHT", 0, PAL_CYAN);
+            hud_text(130, 114, "NO LAP RECORDS", 0, PAL_WHITE);
+            hud_text(130, 130, "ROUTE UNVERIFIED", 0, PAL_YELLOW);
+        } else
+#endif
+        {
         q = put(buf, "LAPS ");
         if (mode == MODE_ARCADE) put_num(q, td->laps); else put(q, "FREE");
         hud_text(130, 84, buf, 0, PAL_WHITE);
@@ -391,8 +413,13 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
                  *q++ = '"'; *q++ = '0' + (b % 60 * 100 / 60) / 10; *q++ = '0' + (b % 60 * 100 / 60) % 10; *q = 0; }
         else put(buf, "--");
         hud_text_right(228, 132, buf, 0, PAL_WHITE);
+        }
         hud_text(10, 150, "< > COURSE", 0, (*t >> 3) & 1 ? PAL_YELLOW : PAL_WHITE);
+#ifdef WITH_VRD_32X_TRACKS
+        hud_text_right(234, 150, set==TRACK_SET_VRD ? "A DRIVE  B BACK" : "A RACE  B BACK", 0, PAL_WHITE);
+#else
         hud_text_right(234, 150, "A RACE  B BACK", 0, PAL_WHITE);
+#endif
         present();
         (*t)++;
     }
@@ -745,7 +772,13 @@ int main(void)
             for (;;) {
                 s32 c = course_select(&t, &course, m);
                 if (c < 0) break;
-                while (play(-1, c, m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE, 0)) {}
+                // Staging routes are skeleton-derived and lack verified lap
+                // endpoints. 32X studies are therefore free-drive only.
+                while (play(-1, c,
+#ifdef WITH_VRD_32X_TRACKS
+                    c>=TRACK_VRD_FIRST ? RACE_FREE :
+#endif
+                    m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE, 0)) {}
                 show_track(course);
                 t = 0;
             }

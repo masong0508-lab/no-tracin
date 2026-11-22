@@ -315,3 +315,17 @@ mesh, route progression, start lines, scenery and vertical-unit conversion
 still require further work. The standalone ROMs and both Handling and Motion
 Physics settings remain unchanged in this source-only milestone. Details:
 [32X BSP and height research](docs/32X_BSP_HEIGHT_SURFACE_DECODE.md).
+
+### Optional five-environment 32X road-study free-drive build
+
+The **private** `make vr-deluxe-study VR_ROM=... VR32X_ROM=...` build now adds
+**32X ROAD STUDIES** as a third course set. Press L/R in Arcade or Free Run
+to select it, then choose SLOT 0 through SLOT 4. The game switches these
+study environments to FREE DRIVE, with no fictional lap or race records.
+Their 2D road masks, sampled height planes, terrain collision and simple
+bounded road polygons are derived from the exact privately supplied US 32X
+ROM; their staging loops and vertical scaling are experimental. **These are
+not authentic, named Highland/Sand Park/etc. complete ports**. Standard and
+Genesis-only builds need no 32X data, scientific Python packages, heap or
+additional framebuffer. See
+[the 32X road-study implementation and test report](docs/32X_GBA_ROAD_STUDY_VALIDATION.md).

@@ -69,3 +69,37 @@ build/track.o: src/tracks_data.h
 
 src/tracks_data.h src/tracks_dims.h &: tools/mktracks.py
 	python3 tools/mktracks.py
+
+# PRIVATE 32X road-study pack. The US 32X source ROM never enters Git.
+# Adds five decoded, sampled road-elevation environments as Free Run studies;
+# no asserted Sega course names, lap/finish, scenery or original mesh parity.
+VRD_BUILD := build/vr-deluxe-study
+VRD_OBJS := $(patsubst build/%.o,$(VRD_BUILD)/%.o,$(OBJS)) $(VRD_BUILD)/vr_original.o $(VRD_BUILD)/vrd32x_study.o
+VRD_FLAGS := $(CFLAGS) -DWITH_VR_ORIGINAL_TRACKS -DWITH_VRD_32X_TRACKS -I$(VRD_BUILD)
+VRD_HEADERS := $(VRD_BUILD)/vr_original_tracks.h $(VRD_BUILD)/vr_original_mesh.h $(VRD_BUILD)/vrd32x_study_tracks.h $(VRD_BUILD)/vrd32x_study_data.h
+
+.PHONY: vr-deluxe-study
+vr-deluxe-study:
+	@test -n "$(VR_ROM)" -a -n "$(VR32X_ROM)" || (echo 'Supply VR_ROM=/path/to/Genesis-Virtua.bin VR32X_ROM=/path/to/Deluxe32X.bin' >&2; exit 2)
+	python3 tools/import_vr_original.py --rom "$(VR_ROM)" --output-dir $(VRD_BUILD)
+	python3 tools/import_vrd_32x_explorer.py --rom "$(VR32X_ROM)" --out-dir $(VRD_BUILD)
+	$(MAKE) $(VRD_BUILD)/notracin-vr-deluxe-study.gba
+
+$(VRD_BUILD)/notracin-vr-deluxe-study.gba: $(VRD_BUILD)/notracin.elf
+	$(OBJCOPY) -O binary $< $@
+	python3 tools/fixheader.py $@
+
+$(VRD_BUILD)/notracin.elf: $(VRD_OBJS) gba.ld
+	$(CC) $(LDFLAGS) $(VRD_OBJS) -lgcc -o $@
+
+$(VRD_BUILD)/crt0.o: src/crt0.s | $(VRD_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VRD_BUILD)/fill.o: src/fill.s | $(VRD_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VRD_BUILD)/%.o: src/%.c $(wildcard src/*.h) $(VRD_HEADERS) | $(VRD_BUILD)
+	$(CC) $(VRD_FLAGS) -c $< -o $@
+
+$(VRD_BUILD):
+	mkdir -p $@
