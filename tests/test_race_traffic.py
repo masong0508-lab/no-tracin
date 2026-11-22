@@ -38,7 +38,7 @@ class RaceTrafficTests(unittest.TestCase):
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
             for case in ("contact-softbody", "contact-arcade", "following-player",
-                         "following-rival", "slipstream", "softbody-draft", "far", "standings",
+                         "following-rival", "slipstream", "softbody-draft", "far", "free-run-skip", "standings",
                          "rejoin-draft", "rejoin-following", "rejoin-culling",
                          "projection-missing", "rejoin-standings"):
                 with self.subTest(case=case):

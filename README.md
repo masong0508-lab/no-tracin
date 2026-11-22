@@ -40,7 +40,7 @@ The standard build has three custom courses inspired by Virtua Racing's corner o
 | Acropolis | Expert | Climbing esses up to the temple hairpin, a long downhill, a double-apex right, a switchback and a last tight hairpin before the line |
 
 - **Arcade:** 3 laps against seven CPU cars, starting last on the grid. The clock counts down; the half-lap checkpoint and each lap line add time. Run out and it's TIME OVER. After the flag you get your position, total time and lap times.
-- **Free Run:** the course to yourself, no clock, as many laps as you like.
+- **Free Run:** the course to yourself, no clock, as many laps as you like. CPU-opponent route setup and opponent simulation are skipped entirely.
 - Off the road, the grass slows you right down; the barriers keep you on the circuit.
 - Best laps and best race times are saved for each course.
 - In a race, START pauses (Resume, Restart Race, Options, Quit to Menu).

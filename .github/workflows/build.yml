@@ -22,3 +22,11 @@ jobs:
         run: make -j2
       - name: Verify generated custom course data
         run: git diff --exit-code -- src/tracks_data.h src/tracks_dims.h
+
+      - name: Upload standard GBA ROM (no donor assets)
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-standard-gba
+          path: notracin.gba
+          if-no-files-found: error
+          retention-days: 30

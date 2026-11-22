@@ -195,14 +195,16 @@ void race_begin(s32 track, s32 mode, Car *player)
     const TrackDef *t = g_track;
     g->mode = mode;
     g->track = track;
-    race_half_width = track_half_width(0);
-    for (s32 i = 1; i < t->count; i++) {
-        s32 width = track_half_width(i);
-        if (width < race_half_width) race_half_width = width;
+    if (mode == RACE_ARCADE) {
+        race_half_width = track_half_width(0);
+        for (s32 i = 1; i < t->count; i++) {
+            s32 width = track_half_width(i);
+            if (width < race_half_width) race_half_width = width;
+        }
+        build_line_speed();
     }
     g->laps = mode == RACE_ARCADE ? t->laps : 9999;     // free run goes on until you quit
     g->time_left = t->start_time * 60;
-    build_line_speed();
     rng = 777 + track * 31;
 
     s32 d, lat, x, z, y, h, hint = 0;
@@ -220,6 +222,8 @@ void race_begin(s32 track, s32 mode, Car *player)
     previous_x = player->x;
     previous_z = player->z;
 
+    // Free Run has no opponents; avoid unnecessary pose/terrain work.
+    if (mode != RACE_ARCADE) return;
     for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
         grid_slot(i, &d, &lat);
@@ -265,11 +269,17 @@ static s32 traffic_gap(s32 gap)
 
 static void rivals_step(Car *player, s32 started, s32 road_d, s32 plat)
 {
+    // Free Run has neither opponents nor drafting. Skip its unused speed
+    // square root entirely on the per-physics-step path.
+    if (g_race.mode != RACE_ARCADE) {
+        g_race.slipstream = 0;
+        return;
+    }
     const TrackDef *t = g_track;
     s32 px = player->x >> 8, pz = player->z >> 8;
     s32 pspeed = car_speed(player);
     s32 tow = 0;
-    for (s32 i = 0; i < RIVALS && g_race.mode == RACE_ARCADE; i++) {
+    for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
         if (started) {
             s32 seg = r->hint + 1 >= t->count ? 0 : r->hint + 1;
@@ -419,6 +429,11 @@ void race_step(Car *player, s32 started)
         if (speed > 300 && along * 2 < -speed && player->mode == CAR_GROUND) g->wrong_steps++;
         else g->wrong_steps = 0;
         g->wrong_way = g->wrong_steps > 45;
+    } else {
+        // Without a segment there is no meaningful course direction.
+        // Clear the warning and the pending streak before road reacquisition.
+        g->wrong_steps = 0;
+        g->wrong_way = 0;
     }
     if (!started) return;
 

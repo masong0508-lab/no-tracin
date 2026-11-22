@@ -61,7 +61,12 @@ s32 world_ground_plane(s32 x, s32 z, s32 r, s32 *h, s32 *gx, s32 *gz)
 {
     (void)x; (void)z; (void)r; *h = *gx = *gz = 0; return 1;
 }
-s32 car_speed(const Car *car) { return isqrt(car->vx * car->vx + car->vz * car->vz); }
+static s32 speed_queries;
+s32 car_speed(const Car *car)
+{
+    speed_queries++;
+    return isqrt(car->vx * car->vx + car->vz * car->vz);
+}
 void car_respawn(Car *car) { (void)car; assert(0 && "Flat traffic fixture cannot respawn"); }
 void sound_play(s32 sound) { (void)sound; }
 void game_message(const char *a, const char *b, s32 palette, s32 steps)
@@ -292,6 +297,25 @@ static void rejoin_standings(s32 course)
     assert(g_race.position == 2 && g_race.progress == 2000 && g_race.last_d == 1500);
 }
 
+
+static void free_run_skips_racing_work(s32 course)
+{
+    Car car = reset_case(course, 1000, 1300, 2000);
+    // Free Run should not build CPU speed targets or opponent poses.
+    line_speed[0] = 1234;
+    rivals[0].s = 71123;
+    race_begin(course, RACE_FREE, &car);
+    assert(g_race.mode == RACE_FREE && g_race.position == 1);
+    assert(line_speed[0] == 1234 && rivals[0].s == 71123);
+
+    g_race.slipstream = 1;
+    speed_queries = 0;
+    s32 x = car.x, z = car.z, vx = car.vx, vz = car.vz;
+    rivals_step(&car, 1, next_distance, 0);
+    assert(speed_queries == 0 && g_race.slipstream == 0);
+    assert(car.x == x && car.z == z && car.vx == vx && car.vz == vz);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -307,6 +331,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[1], "slipstream")) slipstream(course);
         else if (!strcmp(argv[1], "softbody-draft")) softbody_draft(course);
         else if (!strcmp(argv[1], "far")) far_traffic(course);
+        else if (!strcmp(argv[1], "free-run-skip")) free_run_skips_racing_work(course);
         else if (!strcmp(argv[1], "standings")) standings(course);
         else if (!strcmp(argv[1], "rejoin-draft")) rejoin_draft(course);
         else if (!strcmp(argv[1], "rejoin-following")) rejoin_following(course);
