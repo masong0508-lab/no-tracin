@@ -23,10 +23,11 @@ s16 track_pitch[256];
 const u32 g_vr_original_pack_version = 0x11223344;
 #endif
 const Loop the_loop = {0};
-static s32 messages, saved;
+static s32 messages, saved, projection_available = 1;
 
 s32 track_find(s32 x, s32 z, TrackHit *hit)
 {
+    if (!projection_available) return 0;
     s32 d = (z - 4000) % 10000;
     if (d < 0) d += 10000;
     s32 lat = x - 5000;
@@ -66,6 +67,7 @@ static Car reset_case(s32 course, s32 mode, s32 progress)
     memset(recs, 0, sizeof(recs));
     memset(rivals, 0, sizeof(rivals));
     sb_invalidate();
+    projection_available = 1;
     g_track = &g_tracks[course];
     r_far = 1800;
     race_half_width = 150;
@@ -167,6 +169,47 @@ static void wrong_way_cone(s32 course)
     car.vz = 800;
     race_step(&car, 1);
     assert(!g_race.wrong_way);
+}
+
+
+static void wrong_way_projection_loss(s32 course)
+{
+    // Losing the road projection must clear a visible or pending warning.
+    // Reacquiring the road must require a fresh 46 reverse-motion steps.
+    for (s32 mode = RACE_ARCADE; mode <= RACE_FREE; mode++) {
+        Car car = reset_case(course, mode, 5000);
+        car.mode = CAR_GROUND;
+        car.vx = 0;
+        car.vz = -800;
+        for (s32 i = 0; i < 46; i++) race_step(&car, 1);
+        assert(g_race.wrong_way && g_race.wrong_steps == 46);
+        s32 progress = g_race.progress, road = g_race.last_d;
+
+        projection_available = 0;
+        race_step(&car, 0); // Also clear the warning during a countdown.
+        assert(!g_race.wrong_way && g_race.wrong_steps == 0);
+        assert(g_race.progress == progress && g_race.last_d == road);
+
+        projection_available = 1;
+        for (s32 i = 0; i < 45; i++) {
+            race_step(&car, 1);
+            assert(!g_race.wrong_way);
+        }
+        assert(g_race.wrong_steps == 45);
+        race_step(&car, 1);
+        assert(g_race.wrong_way);
+
+        // Partial reverse motion must also be forgotten after losing track.
+        car.vz = 800;
+        race_step(&car, 1);
+        assert(!g_race.wrong_way && g_race.wrong_steps == 0);
+        car.vz = -800;
+        for (s32 i = 0; i < 20; i++) race_step(&car, 1);
+        assert(!g_race.wrong_way && g_race.wrong_steps == 20);
+        projection_available = 0;
+        race_step(&car, 1);
+        assert(!g_race.wrong_way && g_race.wrong_steps == 0);
+    }
 }
 
 static Car finish_case(s32 course, s32 player_before, s32 rival_before_q8,
@@ -349,6 +392,7 @@ int main(int argc, char **argv)
         s32 course = set * TRACKS_PER_SET;
         if (!strcmp(argv[1], "wrong-way-motion")) wrong_way_motion(course);
         else if (!strcmp(argv[1], "wrong-way-cone")) wrong_way_cone(course);
+        else if (!strcmp(argv[1], "wrong-way-projection-loss")) wrong_way_projection_loss(course);
         else if (!strcmp(argv[1], "finish-prior")) finish_prior(course);
         else if (!strcmp(argv[1], "finish-same")) finish_same(course);
         else if (!strcmp(argv[1], "finish-tie")) finish_tie(course);

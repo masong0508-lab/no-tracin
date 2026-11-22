@@ -92,7 +92,11 @@ class GameLoopTests(unittest.TestCase):
                     output = self.run_case("cadence", 410, 1000, speed, slowmo, 1)
                     fields = dict(word.split("=") for word in output.split()[1:])
                     self.assertEqual(int(fields["actual_steps"]), 4000)
-                    self.assertGreater(int(fields["remainder"]), 0)
+                    # Four-step overload discards only whole steps, never the fraction.
+                    lengths = (280896, 280896 * 10 // 13, 280896 * 4 // 3)
+                    interval = lengths[speed] * (3 if slowmo else 1)
+                    self.assertEqual(int(fields["remainder"]),
+                                     int(fields["elapsed"]) % interval)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES = (
-    "wrong-way-motion", "wrong-way-cone", "finish-prior", "finish-same",
+    "wrong-way-motion", "wrong-way-cone", "wrong-way-projection-loss", "finish-prior", "finish-same",
     "finish-tie", "finish-subunit", "respawn-back", "respawn-cp", "respawn-lap",
     "respawn-forward", "respawn-grid", "jump-guard",
 )
