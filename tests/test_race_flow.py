@@ -18,7 +18,7 @@ CASES = (
 
 
 class RaceFlowTests(unittest.TestCase):
-    def run_host_checks(self, optional, real_finish=False):
+    def run_host_checks(self, optional, real_finish=False, study=False):
         compiler = shlex.split(os.environ.get("HOST_CC", "cc"))
         if not compiler or not shutil.which(compiler[0]):
             self.skipTest("Host C compiler not available (set HOST_CC)")
@@ -40,11 +40,13 @@ class RaceFlowTests(unittest.TestCase):
             ]
             if optional:
                 command.append("-DWITH_VR_ORIGINAL_TRACKS")
+            if study:
+                command.append("-DWITH_VRD_32X_TRACKS")
             if real_finish:
                 command.append(str(ROOT / "src/track.c"))
             built = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            cases = ("player-first", "rival-first", "tie", "prior-rival") if real_finish else CASES
+            cases = ("study-free-drive",) if study else (("player-first", "rival-first", "tie", "prior-rival") if real_finish else CASES)
             for case in cases:
                 with self.subTest(case=case):
                     run = subprocess.run([str(binary), case], capture_output=True,
@@ -57,6 +59,9 @@ class RaceFlowTests(unittest.TestCase):
 
     def test_optional_race_flow(self):
         self.run_host_checks(True)
+
+    def test_32x_study_real_road_respawn_without_fake_laps(self):
+        self.run_host_checks(True, study=True)
 
     def test_fractional_finishes_across_actual_stock_course_seam(self):
         self.run_host_checks(False, real_finish=True)

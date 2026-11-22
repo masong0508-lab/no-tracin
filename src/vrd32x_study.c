@@ -28,10 +28,42 @@ static s32 sample(s32 slot,s32 x,s32 z)
     return height==65535 ? -1 : height;
 }
 
+// The 32X BSP source is sampled every 32 world units; taking the nearest
+// sample for each wheel creates 32-unit stair steps on long inclines. Blend
+// height *within a fully supported four-sample patch*. If any required
+// sample belongs to unsupported/off-road space, use the last known road
+// sample rather than inventing a bridge across that gap. Q8 output, no heap
+// and no extra tables. Exact 32-unit grid vertices remain byte-identical.
+static s32 smooth_height(s32 slot,s32 x,s32 z)
+{
+    s32 a=sample(slot,x,z);
+    if(a<0) return -1;
+    s32 fx=x&31,fz=z&31;
+    if(!fx && !fz) return a*256;
+    s32 b=a,c=a,d=a;
+    if(fx) {
+        b=sample(slot,x+32,z);
+        if(b<0) return a*256;
+    }
+    if(fz) {
+        c=sample(slot,x,z+32);
+        if(c<0) return a*256;
+    }
+    if(fx && fz) {
+        d=sample(slot,x+32,z+32);
+        if(d<0) return a*256;
+    }else if(fx) d=b;
+    else d=c;
+    // Raw samples are 8..800. All intermediates fit signed 32-bit.
+    s32 h0=a*32+(b-a)*fx;
+    s32 h1=c*32+(d-c)*fx;
+    return (h0*(32-fz)+h1*fz)/4;
+}
+
 s32 vrd32x_study_height(s32 slot,s32 x,s32 z)
 {
-    s32 h=sample(slot,x,z);
-    return h < 0 ? 0 : h*256;
+    s32 h=smooth_height(slot,x,z);
+    return h<0 ? 0 : h;
 }
 
 s32 vrd32x_study_surface(s32 slot,s32 x,s32 z)
@@ -44,15 +76,18 @@ s32 vrd32x_study_ground_plane(s32 slot,s32 x,s32 z,s32 r,s32 *h,s32 *gx,s32 *gz)
     // A normal plane is valid only if the car footprint stays on the
     // authenticated road. At cliff edges, fall back to point contacts.
     *h=*gx=*gz=0;
-    s32 center=sample(slot,x,z);
-    if(center<0 || sample(slot,x-r,z)<0 || sample(slot,x+r,z)<0 ||
-       sample(slot,x,z-r)<0 || sample(slot,x,z+r)<0) return 0;
-    s32 x0=sample(slot,x-32,z),x1=sample(slot,x+32,z);
-    s32 z0=sample(slot,x,z-32),z1=sample(slot,x,z+32);
-    if (x0<0||x1<0||z0<0||z1<0) return 0;
-    *h=center*256;
-    *gx=(x1-x0)*4; // Q8 rise per unit = height delta *256 / 64
-    *gz=(z1-z0)*4;
+    if(r<0 || sample(slot,x,z)<0 || sample(slot,x-r,z)<0 ||
+       sample(slot,x+r,z)<0 || sample(slot,x,z-r)<0 ||
+       sample(slot,x,z+r)<0) return 0;
+    // Central differences of the *same smoothed surface* used by the car.
+    // Using the raw-nearest value for the center but a different plane for
+    // its wheels caused pops and unintended velocity impulses on slopes.
+    s32 x0=smooth_height(slot,x-32,z),x1=smooth_height(slot,x+32,z);
+    s32 z0=smooth_height(slot,x,z-32),z1=smooth_height(slot,x,z+32);
+    if(x0<0||x1<0||z0<0||z1<0) return 0;
+    *h=smooth_height(slot,x,z);
+    *gx=(x1-x0)/64; // Q8 rise per world unit, same convention as track.c
+    *gz=(z1-z0)/64;
     return 1;
 }
 
@@ -85,7 +120,17 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
         s32 c=sample(slot,x+64,z+64),d=sample(slot,x+64,z);
         s32 valid=(a>=0)+(b>=0)+(c>=0)+(d>=0);
         if(valid<3)continue;
-        u8 mat=COLOR(M_ASPHALT,((x>>7)+(z>>7))&1);
+        // Shade steep grades using the four *already fetched* authentic
+        // height samples. Flat roads keep a quiet two-tone texture, while
+        // uphill/downhill surfaces gain directional light without extra
+        // polygons, collision queries or framebuffer allocations.
+        s32 shade=((x>>7)+(z>>7))&1;
+        if(valid==4) {
+            s32 dx=(c+d)-(a+b),dz=(b+c)-(a+d);
+            s32 grade=(dx<0?-dx:dx)+(dz<0?-dz:dz);
+            if(grade>24) shade=(dx-dz)>=0 ? 0 : 2;
+        }
+        u8 mat=COLOR(M_ASPHALT,shade);
         if(valid==4){ground_quad(x,z,64,a,b,c,d,mat);faces++;}
         else {
             // Draw triangles along actual mask boundaries, never a quad

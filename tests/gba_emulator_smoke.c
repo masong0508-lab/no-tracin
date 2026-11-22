@@ -93,7 +93,10 @@ int main(int argc, char **argv)
     uint32_t motion_addr = argc == 12 ? strtoul(argv[11], NULL, 16) : 0;
     if (physics >= 0 && (physics >= 4 || !options_addr || !model_addr)) return 2;
     if (motion >= 0 && (motion >= 2 || !options_addr || !motion_addr)) return 2;
-    if ((original != 0 && original != 1) || course_index < 0 || course_index >= 3) return 2;
+    // The optional Deluxe study set has FIVE slots after the two old
+    // three-course sets. Preserve 0/1 command-line modes for older builds.
+    if (original < 0 || original > 2 || course_index < 0 ||
+        course_index >= (original == 2 ? 5 : 3)) return 2;
     struct mLogger logger = {.log = on_log, .filter = NULL};
     mLogSetDefaultLogger(&logger);
     core = mCoreFind(argv[1]);
@@ -159,11 +162,11 @@ int main(int argc, char **argv)
         for (int i = 0; i < 5; ++i) tap(KEY_UP);
     }
     run(12, KEY_A); run(80, 0);
-    if (original) { run(12, KEY_L); run(30, 0); }
+    for (int set = 0; set < original; ++set) tap(KEY_L);
     for (int i = 0; i < course_index; i++) { run(12, KEY_RIGHT); run(30, 0); }
     shot(argv[4], "course"); status("course", frame_addr, race_addr);
     run(12, KEY_A); run(45, 0);
-    int expected_track = (original ? 3 : 0) + course_index;
+    int expected_track = (original == 2 ? 6 : original * 3) + course_index;
     if ((int32_t)read32(race_addr + 4) != expected_track) {
         fprintf(stderr, "Wrong selected track: expected %d, got %d\n",
                 expected_track, (int32_t)read32(race_addr + 4));

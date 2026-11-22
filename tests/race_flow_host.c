@@ -16,6 +16,9 @@ const TrackDef g_tracks[TRACK_COUNT] = {
 #ifdef WITH_VR_ORIGINAL_TRACKS
     COURSE, COURSE, COURSE,
 #endif
+#ifdef WITH_VRD_32X_TRACKS
+    COURSE, COURSE, COURSE, COURSE, COURSE,
+#endif
 };
 const TrackDef *g_track;
 s16 track_pitch[256];
@@ -24,6 +27,11 @@ const u32 g_vr_original_pack_version = 0x11223344;
 #endif
 const Loop the_loop = {0};
 static s32 messages, saved, projection_available = 1;
+#ifdef WITH_VRD_32X_TRACKS
+static s32 road_covered = 1;
+s32 track_surface(s32 x, s32 z)
+{ (void)x; (void)z; return road_covered ? SURF_ROAD : SURF_GRASS; }
+#endif
 
 s32 track_find(s32 x, s32 z, TrackHit *hit)
 {
@@ -384,6 +392,45 @@ static void jump_guard(s32 course)
     assert(g_race.progress == 1000 && g_race.last_d == 1400 && !g_race.cp_given);
 }
 
+
+#ifdef WITH_VRD_32X_TRACKS
+static void study_free_drive(void)
+{
+    Car car = reset_case(TRACK_VRD_FIRST, RACE_FREE, 9990);
+    road_covered = 1;
+    car.mode = CAR_GROUND;
+    car.x = 6300 * 256; // A verified side branch, not the staging centreline.
+    car.z = 4020 * 256;
+    car.heading = 12420;
+    // Unverified direction from the skeleton must never show a warning.
+    g_race.wrong_way = 1;
+    g_race.wrong_steps = 100;
+    const s32 original_cp = g_race.cp_given;
+    for (s32 i = 0; i < 16; i++) race_step(&car, 1);
+    assert(!g_race.wrong_way && !g_race.wrong_steps);
+    assert(g_race.total_steps == 16);
+    assert(car.safe_x == 6300 && car.safe_z == 4020);
+    assert(car.safe_heading == 12420);
+    assert(g_race.lap == 0 && g_race.best_lap == 0 && !saved && !messages);
+
+    // Free-drive recovery must return to the last REAL road pose, even if
+    // the player leaves the route grid or a different 32X branch is nearby.
+    car.x = 7000 * 256;
+    car.z = 8500 * 256;
+    car_respawn(&car);
+    assert(car.x == 6300 * 256 && car.z == 4020 * 256);
+    assert(car.heading == 12420);
+    s32 old_x = car.safe_x, old_z = car.safe_z;
+    road_covered = 0;
+    car.x = 6600 * 256;
+    car.z = 4400 * 256;
+    for (s32 i = 0; i < 16; i++) race_step(&car, 1);
+    assert(car.safe_x == old_x && car.safe_z == old_z);
+    assert(g_race.lap == 0 && g_race.cp_given == original_cp && !saved && !messages);
+    road_covered = 1;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -392,6 +439,10 @@ int main(int argc, char **argv)
     tune_apply();
     for (s32 set = 0; set < TRACK_SET_COUNT; set++) {
         s32 course = set * TRACKS_PER_SET;
+#ifdef WITH_VRD_32X_TRACKS
+        if (!strcmp(argv[1], "study-free-drive")) { study_free_drive(); break; }
+        else
+#endif
         if (!strcmp(argv[1], "wrong-way-motion")) wrong_way_motion(course);
         else if (!strcmp(argv[1], "wrong-way-cone")) wrong_way_cone(course);
         else if (!strcmp(argv[1], "wrong-way-projection-loss")) wrong_way_projection_loss(course);

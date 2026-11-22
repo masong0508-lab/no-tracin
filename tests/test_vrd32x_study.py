@@ -28,8 +28,9 @@ class RoadStudyTerrainTests(unittest.TestCase):
             tile.write_text('''// SYNTHETIC ONLY. Sampled genuine source data is never committed.
 static const u16 test_tile[4096] = { [0] = 1 };
 static const u16 test_h[64] = { ''' + ', '.join(map(str, heights)) + ''' };
+static const u16 test_h2[64] = { ''' + ', '.join(map(str, [90 - 4 * row - 3 * col for row in range(8) for col in range(8)])) + ''' };
 static const u16 *const vrd_study_lookups[5] = { test_tile, test_tile, test_tile, test_tile, test_tile };
-static const u16 *const vrd_study_heights[5] = { test_h, test_h, test_h, test_h, test_h };
+static const u16 *const vrd_study_heights[5] = { test_h, test_h2, test_h, test_h, test_h };
 ''')
             fixture = temp / 'verify.c'
             fixture.write_text(r'''
@@ -47,9 +48,26 @@ int main(void) {
     g_track = g_tracks + TRACK_VRD_FIRST + 4;
     assert(vrd32x_study_slot() == 4);
     assert(vrd32x_study_height(0,96,96) == 31*256);
+    // Bilinear Q8 road height, including half-grid positions. The mask
+    // remains discrete: no blended bridge into an unsupported neighboring cell.
+    assert(vrd32x_study_height(0,112,96) == (31*256 + 3*128));
+    assert(vrd32x_study_height(0,96,112) == (31*256 + 4*128));
+    assert(vrd32x_study_height(0,112,112) == (31*256 + 7*128));
+    assert(vrd32x_study_height(0,239,96) == 43*256);
+    assert(vrd32x_study_height(0,256,96) == 0);
+    assert(vrd32x_study_surface(0,255,96) == SURF_ROAD);
+    assert(vrd32x_study_surface(0,256,96) == SURF_GRASS);
+    // Negative grades are safe too; no unsigned wrap or truncated Q8.
+    assert(vrd32x_study_height(1,112,112) == (90*256 - 49*128));
     assert(vrd32x_study_surface(0,96,96) == SURF_ROAD);
     assert(vrd32x_study_ground_plane(0,96,96,8,&h,&gx,&gz));
     assert(h == 31*256 && gx == 24 && gz == 32);
+    assert(vrd32x_study_ground_plane(0,112,112,8,&h,&gx,&gz));
+    assert(h == 31*256 + 7*128 && gx == 24 && gz == 32);
+    assert(vrd32x_study_ground_plane(1,112,112,8,&h,&gx,&gz));
+    assert(h == 90*256 - 49*128 && gx == -24 && gz == -32);
+    assert(!vrd32x_study_ground_plane(0,239,96,8,&h,&gx,&gz));
+    assert(h == 0 && gx == 0 && gz == 0);
     assert(vrd32x_study_surface(0,260,96) == SURF_GRASS);
     assert(vrd32x_study_height(0,-32,96) == 0);
     assert(vrd32x_study_surface(0,16384,96) == SURF_GRASS);

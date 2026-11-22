@@ -48,6 +48,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: no-tracin-headless-mgba-evidence
-          path: build/emulator-smoke/
+          path: |
+            build/emulator-smoke/
+            build/gba_emulator_smoke
           if-no-files-found: warn
           retention-days: 14

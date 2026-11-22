@@ -427,6 +427,37 @@ void race_step(Car *player, s32 started)
     // Traffic uses the current projection, or the last one if off the road.
     s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
     rivals_step(player, started, d, found ? hit.lat : 0);
+#ifdef WITH_VRD_32X_TRACKS
+    if (g->track >= TRACK_VRD_FIRST) {
+        // Free Drive has no verified starting grid, lap direction or finish.
+        // The skeleton is a spawn/camera aid only: NEVER award fictional
+        // checkpoints, lap records or WRONG WAY penalties from that path.
+        if (found) {
+            s32 delta = d - g->last_d;
+            if (delta > t->lap / 2) delta -= t->lap;
+            if (delta < -t->lap / 2) delta += t->lap;
+            if (iabs(delta) < 200) g->progress += delta;
+            g->last_d = d;
+            g->hint = hit.seg;
+        }
+        g->wrong_way = g->wrong_steps = g->slipstream = 0;
+        if (started) {
+            g->total_steps++;
+            // Save the actual car pose on any verified drivable BSP road,
+            // including side branches far away from the skeleton. Rejoining
+            // the imaginary staging centreline used to reset exploration.
+            if (!(g->total_steps & 15) && player->mode == CAR_GROUND &&
+                track_surface(x, z) == SURF_ROAD) {
+                player->safe_x = x;
+                player->safe_z = z;
+                player->safe_heading = player->heading;
+                safe_progress = g->progress;
+                safe_d = g->last_d;
+            }
+        }
+        return;
+    }
+#endif
     if (found) {
         s32 delta = d - g->last_d;
         if (delta > t->lap / 2) delta -= t->lap;
