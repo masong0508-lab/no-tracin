@@ -302,3 +302,16 @@ The independently selectable **Motion Physics: Newton** now also conserves
 the loop's lateral tangent velocity and residual movement on both forward
 completion and backward exit. It keeps the prior behavior for **Original**
 motion. See [ROM tracing and Newton validation](docs/ROM_TRACING_AND_LOOP_MOMENTUM_20261122.md).
+
+### 32X Deluxe road-region and terrain-height decoding (source-only)
+
+The read-only 32X inspector has advanced beyond counted records. A tested
+interpreter now follows the exact 68000 **BSP road-boundary decisions and
+surface height plane equations**, sampling all five verified normal lookup
+slots without guessing course labels. A separate offline exporter creates
+private, triangulated *study* road surfaces from the user-owned ROM. This is
+**not an imported playable five-course Deluxe edition**: the actual source
+mesh, route progression, start lines, scenery and vertical-unit conversion
+still require further work. The standalone ROMs and both Handling and Motion
+Physics settings remain unchanged in this source-only milestone. Details:
+[32X BSP and height research](docs/32X_BSP_HEIGHT_SURFACE_DECODE.md).
