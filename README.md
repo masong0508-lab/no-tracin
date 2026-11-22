@@ -284,9 +284,15 @@ analysis. See [Motion Physics and ROM validation](docs/NEWTON_MOTION_AND_ROM_INP
 ### 32X and Race Drivin' ROM tracing: verified first-stage data
 
 The user-supplied US Virtua Racing Deluxe 32X cartridge now has an audited
-**six-slot normal plus one-slot alternate** 68000 route-index table: 28,672
-validated lookup addresses, with source-offset and endian checks in
-`tools/inspect_vrd_32x_tables.py`. This is *not yet* a five-course 3D
+**six-slot normal plus one-slot alternate** 68000 road lookup. An important
+correction to the early investigation: data pointers map through the
+`$900000–$9FFFFF` window with file offsets `address - $800000`, not the
+code window `address - $880000`. The original offset counts were invalid;
+the corrected tool verifies six coherent ROM-derived road outlines and
+1,770 count-delimited records containing 13,096 undecoded 14-word subrecords
+in five normal slots plus the alternate slot. Normal slot 5 does not use
+that record grammar and remains unresolved. The read-only tools are
+`tools/inspect_vrd_32x_tables.py` and `tools/inspect_vrd_32x_records.py`. This is *not yet* a five-course 3D
 geometry importer, and the table slots are not labeled as tracks without
 runtime verification. The verified Race Drivin' Genesis image can be
 inspected with `tools/trace_racedrivin_genesis.py` to inventory tentative
