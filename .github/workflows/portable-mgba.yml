@@ -28,6 +28,7 @@ jobs:
           mkdir -p build/portable
           cc -O2 -D_GNU_SOURCE -std=c99 tests/gba_emulator_smoke.c -lmgba -lm -o build/portable/gba_emulator_smoke
           cp -L /usr/lib/x86_64-linux-gnu/libmgba.so build/portable/libmgba.so.0.10
+          cp -L /usr/lib/x86_64-linux-gnu/libinih.so.1 build/portable/libinih.so.1
           ldd build/portable/gba_emulator_smoke > build/portable/dependencies.txt
           ldd build/portable/libmgba.so.0.10 >> build/portable/dependencies.txt
           cat > build/portable/README.txt <<'EOF'
