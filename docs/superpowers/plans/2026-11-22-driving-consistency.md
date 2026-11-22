@@ -102,14 +102,16 @@ allowlisted evidence archive. No generated course data enters source control.
 **Interfaces:** Final ELF symbols configure the ordinary-input emulator probe;
 the delivered GBA hash identifies every final run and replay.
 
-- [ ] Build standard and optional GBA configurations; check linked RAM, size,
+- [x] Build standard and optional GBA configurations; check linked RAM, size,
   generated custom data and source diff. Expect both builds to pass.
-- [ ] Complete harder driving/nitro and full Arcade runs on all three
+- [x] Complete harder driving/nitro and full Arcade runs on all three
   original courses, plus targeted reverse/recovery checks. Observe results
   without changing gameplay RAM; record any genuine failure and fix its cause.
-- [ ] Replay final input recordings against the final binary and inspect
+- [x] Replay final input recordings against the final binary and inspect
   native-resolution captures. Report actual FPS/coverage without extrapolation.
-- [ ] Obtain a fresh whole-change review, address important findings with
+- [x] Obtain a fresh whole-change review, address important findings with
   failing/passing regressions, and stop optional retesting once verified.
-- [ ] Publish source to the existing draft PR, verify CI, update playable
+- [x] Publish source to the existing draft PR, verify CI, update playable
   downloads/guide/evidence, and confirm every saved artifact result.
+
+Delivery checkpoint: published implementation/docs at 8a5d8b7; 59/59 local tests, both builds, all nine final input replays, exact repeated nitro witness, 12+12 native two-player sessions, CI run 45028638867, and all five file saves verified. Final GBA SHA256 361b4a7bf02a93a6507d51a41f78f9a08ac83e23111fb169b2557f68833ed4c9. Remaining nonblocking review items and actual FPS cost are documented in DRIVING_CONSISTENCY_VALIDATION.md.
