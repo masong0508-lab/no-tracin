@@ -376,7 +376,7 @@ s32 world_height(s32 x, s32 z)
             continue;
         }
         if (x < f->x0 || x >= f->x1 || z < f->z0 || z >= f->z1) continue;
-        if (f->type == F_WATER) return -400 << 8;
+        if (f->type == F_WATER) return -(400 << 8);
         if (f->type == F_BANKLEAD) {
             s32 b = lead_height(f, x, z);
             if (b > h) h = b;
