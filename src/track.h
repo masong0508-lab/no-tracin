@@ -7,7 +7,30 @@
 #include "gba.h"
 #include "tracks_dims.h"      // TRACK_HALF_W, TRACK_WORLD and the grids (from tools/mktracks.py)
 
-#define TRACK_COUNT  3
+#define TRACKS_PER_SET 3
+enum { TRACK_SET_CUSTOM, TRACK_SET_ORIGINAL, TRACK_SET_VRD };
+#define TRACK_VRD_FIRST 6
+#define TRACK_VRD_COUNT 5
+#ifdef WITH_VRD_32X_TRACKS
+#define TRACK_SET_COUNT 3
+#define TRACK_COUNT (TRACK_VRD_FIRST + TRACK_VRD_COUNT)
+#elif defined(WITH_VR_ORIGINAL_TRACKS)
+#define TRACK_SET_COUNT 2
+#define TRACK_COUNT 6
+#else
+#define TRACK_SET_COUNT 1
+#define TRACK_COUNT 3
+#endif
+// Counts differ only for the new non-competitive 32X studies. Legacy
+// custom/original record banks remain fixed at three entries per set.
+static inline s32 track_set_count(s32 set)
+{
+#ifdef WITH_VRD_32X_TRACKS
+    if (set == TRACK_SET_VRD) return TRACK_VRD_COUNT;
+#endif
+    (void)set;
+    return TRACKS_PER_SET;
+}
 
 // One sample along the centreline; the road runs from this point to the next.
 typedef struct {
@@ -39,10 +62,18 @@ typedef struct {
     u8 water_count;
     u8 laps, start_time, cp_time;   // race length, seconds on the clock
     u8 scene;                 // backdrop style (SCENE_*)
+    const u16 *half_widths;    // optional width per segment; NULL uses TRACK_HALF_W
 } TrackDef;
 
 extern const TrackDef g_tracks[TRACK_COUNT];
 extern const TrackDef *g_track;        // NULL in Freedom City
+#ifdef WITH_VR_ORIGINAL_TRACKS
+// Identifies the imported geometry revision, so its records cannot be
+// mistaken for times from a different conversion of the source courses.
+extern const u32 g_vr_original_pack_version;
+#endif
+const char *track_set_name(s32 set);
+s32 track_half_width(s32 seg);
 
 // Nearest point on the road. Returns 0 when (x, z) is nowhere near it.
 typedef struct {
@@ -53,6 +84,9 @@ typedef struct {
     s32 h;          // road height there, Q8
 } TrackHit;
 s32  track_find(s32 x, s32 z, TrackHit *hit);
+// The four route fields match track_find(), but hit->h is zero instead of
+// elevation. Use this for physics paths that need no height lookup.
+s32  track_find_road(s32 x, s32 z, TrackHit *hit);
 
 extern s16 track_pitch[];               // slope of each stretch (1024-unit angle)
 void track_load(s32 index);            // -1 goes back to the city

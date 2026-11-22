@@ -10,20 +10,35 @@
 #include "softbody.h"
 
 Race g_race;
+// Race credit and road projection paired with the car's safe respawn pose.
+static s32 safe_progress, safe_d;
+// Consecutive observed Q8 poses resolve crossing time at the physical line.
+static s32 previous_x, previous_z;
 
 typedef struct {
     s32 s, v;                 // progress (Q8) and speed (Q8 per step)
     s32 lat, lat_target;      // lateral offset from the centreline
     s32 skill;                // Q8 share of the racing line's speed
     s32 hint, timer, color, cap;
-    s32 x, y, z, heading, pitch;   // pose for drawing and collisions
+    s32 x, y, z, heading, pitch, roll;   // pose for drawing and collisions
 } Rival;
 
 // Where the rivals sit across the road (offsets from the centreline).
-#define GRID_LAT   (TRACK_HALF_W * 9 / 20)    // the two columns of the grid
-#define PASS_LAT   (TRACK_HALF_W / 2 + 8)     // pulling out to pass
-#define WANDER_LAT (TRACK_HALF_W / 2 - 4)     // drifting about the road
-#define MAX_LAT    (TRACK_HALF_W - 30)        // shoved toward the edge
+// Imported courses can be narrower: every lane fits the narrowest segment.
+static s32 race_half_width = TRACK_HALF_W;
+static inline s32 lane_limit(void)
+{
+    return race_half_width > 30 ? race_half_width - 30 : 0;
+}
+static inline s32 lane_offset(s32 desired)
+{
+    s32 limit = lane_limit();
+    return desired < limit ? desired : limit;
+}
+#define GRID_LAT   lane_offset(race_half_width * 9 / 20) // the two columns of the grid
+#define PASS_LAT   lane_offset(race_half_width / 2 + 8)  // pulling out to pass
+#define WANDER_LAT lane_offset(race_half_width / 2 - 4)  // drifting about the road
+#define MAX_LAT    lane_limit()                         // shoved toward the edge
 #define GRID_GAP   96                         // between grid slots, staggered left and right
 
 static Rival rivals[RIVALS] EWRAM_BSS;
@@ -61,17 +76,69 @@ static char *put_race_time(char *p, s32 steps)
 // ---------------------------------------------------------------- records
 
 #define REC_MAGIC 0x3256544E      // "NTV2": the courses grew, older records don't count
-typedef struct { s32 best_lap[TRACK_COUNT], best_race[TRACK_COUNT]; } RaceRecords;
-static RaceRecords recs;
+// Keep each bank in the original three-course layout. Installing or removing
+// the optional ROM courses must not resize or overwrite existing custom times.
+typedef struct { s32 best_lap[TRACKS_PER_SET], best_race[TRACKS_PER_SET]; } RaceRecords;
+// Do not load an unused imported-course SRAM bank in the standard-only ROM.
+// Extra road-study courses keep separate unsaved transient state.
+#ifdef WITH_VR_ORIGINAL_TRACKS
+#define SAVED_RECORD_BANKS 2
+#else
+#define SAVED_RECORD_BANKS 1
+#endif
+static RaceRecords recs[SAVED_RECORD_BANKS];  // unchanged on-disk record layout
+#ifdef WITH_VRD_32X_TRACKS
+static RaceRecords study_recs;  // never saved; route start/finish unverified
+#endif
+
+static u32 records_magic(s32 set)
+{
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (set == TRACK_SET_ORIGINAL) return 0x31524F56 ^ g_vr_original_pack_version;
+#else
+    (void)set;
+#endif
+    return REC_MAGIC;
+}
+
+static u32 records_address(s32 set)
+{
+    return set == TRACK_SET_CUSTOM ? RACE_SAVE_AT : ORIGINAL_RACE_SAVE_AT;
+}
+
+static void race_records_save(s32 track)
+{
+    if (track < 0 || track >= TRACK_COUNT) return;
+#ifdef WITH_VRD_32X_TRACKS
+    if (track >= TRACK_VRD_FIRST) return;
+#endif
+    s32 set = track / TRACKS_PER_SET;
+    save_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set]));
+}
 
 void race_records_load(void)
 {
-    if (!load_blob(REC_MAGIC, RACE_SAVE_AT, &recs, sizeof(recs)))
-        for (s32 i = 0; i < TRACK_COUNT; i++) recs.best_lap[i] = recs.best_race[i] = 0;
+    for (s32 set = 0; set < SAVED_RECORD_BANKS; set++) {
+        if (!load_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set])))
+            for (s32 i = 0; i < TRACKS_PER_SET; i++)
+                recs[set].best_lap[i] = recs[set].best_race[i] = 0;
+    }
 }
 
-s32 race_best_lap(s32 track) { return recs.best_lap[track]; }
-s32 race_best_time(s32 track) { return recs.best_race[track]; }
+s32 race_best_lap(s32 track)
+{
+#ifdef WITH_VRD_32X_TRACKS
+    if(track>=TRACK_VRD_FIRST) return 0;
+#endif
+    return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_lap[track % TRACKS_PER_SET] : 0;
+}
+s32 race_best_time(s32 track)
+{
+#ifdef WITH_VRD_32X_TRACKS
+    if(track>=TRACK_VRD_FIRST) return 0;
+#endif
+    return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_race[track % TRACKS_PER_SET] : 0;
+}
 
 // ---------------------------------------------------------------- setup
 
@@ -104,6 +171,39 @@ static void rival_pose(Rival *r)
 {
     track_point(r->s >> 8, r->lat, &r->x, &r->z, &r->y, &r->heading, &r->hint);
     r->pitch = track_pitch[r->hint];
+    r->roll = 0;
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (g_track && g_track >= g_tracks + TRACKS_PER_SET) {
+        // Original roads can bank across the lane as well as climb along it.
+        // Fit the plane beneath all four wheels: a tiny centre derivative
+        // can cross a native height-cell boundary and misrepresent the bank.
+        s32 s = isin(r->heading >> 6), c = icos(r->heading >> 6);
+        s32 rx = (17 * c) >> 14, rz = (-17 * s) >> 14;
+        s32 fx = (30 * s) >> 14, fz = (30 * c) >> 14;
+        s32 heights[4];
+        for (s32 i = 0; i < 4; i++) {
+            s32 right = i & 1 ? 1 : -1, front = i & 2 ? -1 : 1;
+            heights[i] = track_height(r->x + right * rx + front * fx,
+                                      r->z + right * rz + front * fz);
+        }
+        s32 rise_r = heights[1] + heights[3] - heights[0] - heights[2];
+        s32 rise_f = heights[0] + heights[1] - heights[2] - heights[3];
+        s32 area = 4 * (rx * fz - rz * fx);
+        // Use the actual integer sample positions, so coordinate rounding
+        // cannot introduce a false slope on a planar stretch.
+        s32 gx = (rise_r * fz - rise_f * rz) / area;
+        s32 gz = (rise_f * rx - rise_r * fx) / area;
+        if (gx >= -512 && gx <= 512 && gz >= -512 && gz <= 512) {
+            s32 along = (gx * s + gz * c) >> 14;
+            s32 across = (gx * c - gz * s) >> 14;
+            r->y = (heights[0] + heights[1] + heights[2] + heights[3]) / 4;
+            r->pitch = iatan2(along, 256);
+            // car_matrix rolls before pitching: the longitudinal slope must
+            // be included here to keep both body axes on the road plane.
+            r->roll = iatan2(-across, isqrt(256 * 256 + along * along));
+        }
+    }
+#endif
 }
 
 void race_begin(s32 track, s32 mode, Car *player)
@@ -114,9 +214,16 @@ void race_begin(s32 track, s32 mode, Car *player)
     const TrackDef *t = g_track;
     g->mode = mode;
     g->track = track;
+    if (mode == RACE_ARCADE) {
+        race_half_width = track_half_width(0);
+        for (s32 i = 1; i < t->count; i++) {
+            s32 width = track_half_width(i);
+            if (width < race_half_width) race_half_width = width;
+        }
+        build_line_speed();
+    }
     g->laps = mode == RACE_ARCADE ? t->laps : 9999;     // free run goes on until you quit
     g->time_left = t->start_time * 60;
-    build_line_speed();
     rng = 777 + track * 31;
 
     s32 d, lat, x, z, y, h, hint = 0;
@@ -129,15 +236,21 @@ void race_begin(s32 track, s32 mode, Car *player)
     g->last_d = d + t->lap;
     g->hint = hint;
     g->position = slot + 1;
+    safe_progress = g->progress;
+    safe_d = g->last_d;
+    previous_x = player->x;
+    previous_z = player->z;
 
+    // Free Run has no opponents; avoid unnecessary pose/terrain work.
+    if (mode != RACE_ARCADE) return;
     for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
         grid_slot(i, &d, &lat);
-        r->s = d << 8;
+        r->s = d * 256;
         r->v = 0;
         r->lat = r->lat_target = lat;
         // The front of the grid is quicker; it spreads the field out.
-        r->skill = 244 - i * 6 + track * 2 + rnd(4);
+        r->skill = 244 - i * 6 + (track % TRACKS_PER_SET) * 2 + rnd(4);
         r->hint = 0;
         r->timer = 60 + rnd(120);
         r->color = i;
@@ -146,15 +259,46 @@ void race_begin(s32 track, s32 mode, Car *player)
     }
 }
 
+void race_on_respawn(Car *player)
+{
+    if (!player || !g_track) return;
+    // A known respawn returns to previously earned distance. Keep earned
+    // laps/checkpoints and all clocks; repeating the road earns no bonus.
+    g_race.progress = safe_progress;
+    g_race.last_d = safe_d;
+    g_race.wrong_way = g_race.wrong_steps = 0;
+    previous_x = player->x;
+    previous_z = player->z;
+}
+
 // ---------------------------------------------------------------- per step
 
-static void rivals_step(Car *player, s32 started, s32 plat)
+// Physical traffic repeats each lap; standings and rubber banding do not.
+// Most gaps are already local, so only lap-separated cars need a division.
+static s32 traffic_gap(s32 gap)
 {
+    s32 lap = g_track->lap, half = lap / 2;
+    if (gap > half || gap < -half) {
+        gap %= lap;
+        if (gap > half) gap -= lap;
+        else if (gap < -half) gap += lap;
+    }
+    return gap;
+}
+
+static void rivals_step(Car *player, s32 started, s32 road_d, s32 plat)
+{
+    // Free Run has neither opponents nor drafting. Skip its unused speed
+    // square root entirely on the per-physics-step path.
+    if (g_race.mode != RACE_ARCADE) {
+        g_race.slipstream = 0;
+        return;
+    }
     const TrackDef *t = g_track;
     s32 px = player->x >> 8, pz = player->z >> 8;
     s32 pspeed = car_speed(player);
     s32 tow = 0;
-    for (s32 i = 0; i < RIVALS && g_race.mode == RACE_ARCADE; i++) {
+    for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
         if (started) {
             s32 seg = r->hint + 1 >= t->count ? 0 : r->hint + 1;
@@ -174,9 +318,9 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             for (s32 k = -1; k < RIVALS && ((g_race.total_steps + i) & 3) == 0; k++) {
                 if (k == i) continue;
                 s32 os, olat, ov;
-                if (k < 0) { os = g_race.progress << 8; olat = plat; ov = pspeed; }
+                if (k < 0) { os = road_d * 256; olat = plat; ov = pspeed; }
                 else { os = rivals[k].s; olat = rivals[k].lat; ov = rivals[k].v; }
-                s32 ahead = (os - r->s) >> 8;
+                s32 ahead = traffic_gap((os - r->s) >> 8);
                 if (ahead <= 0 || ahead > 150 || iabs(olat - r->lat) > 56) continue;
                 if (ov - 16 < r->cap) r->cap = ov - 16;
                 if (r->timer > 20) r->timer = 20;
@@ -195,12 +339,12 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             else if (r->lat > r->lat_target) r->lat--;
         }
         // Cars well away from the player only need their pose now and then.
-        s32 far = iabs((r->s >> 8) - g_race.progress) > r_far + 300;
+        s32 lead = traffic_gap((r->s >> 8) - road_d);
+        s32 far = iabs(lead) > r_far + 300;
         if (!far || ((g_race.total_steps + i) & 3) == 0 || !started) rival_pose(r);
         if (far) continue;
 
         // Slipstream: tucked in close behind a car at speed, the air drag drops.
-        s32 lead = (r->s >> 8) - g_race.progress;
         if (lead > 60 && lead < 450 && iabs(r->lat - plat) < 36 && pspeed > 1200) tow = 1;
 
         // Contact with the player.
@@ -224,14 +368,14 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             r->lat += r->lat > plat ? shove : -shove;
             if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
             r->lat_target = r->lat;
-            if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
+            if (lead < 0) r->v = (r->v * 15) >> 4;
             else r->v += 40;
             continue;
         }
         s32 dist = isqrt(dx * dx + dz * dz);
         if (dist >= 54 || player->mode == CAR_CRASH) continue;
         if (!dist) { dx = 1; dist = 1; }
-        s32 nx = (dx << 14) / dist, nz = (dz << 14) / dist;
+        s32 nx = (dx * 16384) / dist, nz = (dz * 16384) / dist;
         s32 pen = 54 - dist;
         player->x += (pen * nx) >> 6;
         player->z += (pen * nz) >> 6;
@@ -249,12 +393,13 @@ static void rivals_step(Car *player, s32 started, s32 plat)
         if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
         r->lat_target = r->lat;
         // Whoever was behind loses a little speed.
-        if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
+        if (lead < 0) r->v = (r->v * 15) >> 4;
         else r->v += 40;
     }
     if (tow && player->mode == CAR_GROUND) {
-        player->vx += player->vx >> 10;
-        player->vz += player->vz >> 10;
+        s32 vx = player->vx >> 10, vz = player->vz >> 10;
+        if (sb_valid(player)) sb_add_velocity(player, vx, vz);
+        else { player->vx += vx; player->vz += vz; }
     }
     g_race.slipstream = tow;
 }
@@ -263,47 +408,97 @@ void race_step(Car *player, s32 started)
 {
     Race *g = &g_race;
     const TrackDef *t = g_track;
+#ifdef WITH_VRD_32X_TRACKS
+    RaceRecords *records = g->track>=TRACK_VRD_FIRST ? &study_recs : &recs[g->track / TRACKS_PER_SET];
+#else
+    RaceRecords *records = &recs[g->track / TRACKS_PER_SET];
+#endif
+    s32 record_index = g->track % TRACKS_PER_SET;
+    s32 player_before = g->progress, rival_before[RIVALS];
+    s32 x_before = previous_x, z_before = previous_z;
+    previous_x = player->x;
+    previous_z = player->z;
+    if (g->mode == RACE_ARCADE && g->state == RS_RACING)
+        for (s32 i = 0; i < RIVALS; i++) rival_before[i] = rivals[i].s;
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
-    s32 found = track_find(x, z, &hit);
-    rivals_step(player, started, found ? hit.lat : 0);
+    s32 found = track_find_road(x, z, &hit);
+    // Ignored projection jumps can offset credit from the actual location.
+    // Traffic uses the current projection, or the last one if off the road.
+    s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
+    rivals_step(player, started, d, found ? hit.lat : 0);
+#ifdef WITH_VRD_32X_TRACKS
+    if (g->track >= TRACK_VRD_FIRST) {
+        // Free Drive has no verified starting grid, lap direction or finish.
+        // The skeleton is a spawn/camera aid only: NEVER award fictional
+        // checkpoints, lap records or WRONG WAY penalties from that path.
+        if (found) {
+            s32 delta = d - g->last_d;
+            if (delta > t->lap / 2) delta -= t->lap;
+            if (delta < -t->lap / 2) delta += t->lap;
+            if (iabs(delta) < 200) g->progress += delta;
+            g->last_d = d;
+            g->hint = hit.seg;
+        }
+        g->wrong_way = g->wrong_steps = g->slipstream = 0;
+        if (started) {
+            g->total_steps++;
+            // Save the actual car pose on any verified drivable BSP road,
+            // including side branches far away from the skeleton. Rejoining
+            // the imaginary staging centreline used to reset exploration.
+            if (!(g->total_steps & 15) && player->mode == CAR_GROUND &&
+                track_surface(x, z) == SURF_ROAD) {
+                player->safe_x = x;
+                player->safe_z = z;
+                player->safe_heading = player->heading;
+                safe_progress = g->progress;
+                safe_d = g->last_d;
+            }
+        }
+        return;
+    }
+#endif
     if (found) {
-        s32 d = t->pts[hit.seg].dist + hit.along;
         s32 delta = d - g->last_d;
         if (delta > t->lap / 2) delta -= t->lap;
         if (delta < -t->lap / 2) delta += t->lap;
-        if (iabs(delta) < 200) g->progress += delta;   // a reset jumps; ignore it
+        if (iabs(delta) < 200) g->progress += delta;   // reject unrelated projection jumps
         g->last_d = d;
         g->hint = hit.seg;
         // Respawn on the centreline here after a wreck.
-        if (player->mode == CAR_GROUND && hit.dist < TRACK_HALF_W && (g->total_steps & 15) == 0) {
+        if (player->mode == CAR_GROUND && hit.dist < track_half_width(hit.seg) && (g->total_steps & 15) == 0) {
             s32 sx, sz, sy, sh, sint = hit.seg;
             track_point(d, 0, &sx, &sz, &sy, &sh, &sint);
             player->safe_x = sx;
             player->safe_z = sz;
             player->safe_heading = sh;
+            safe_progress = g->progress;
+            safe_d = d;
         }
-        // Wrong way: facing back along the course while moving.
-        s32 diff = (s16)(player->heading - t->pts[hit.seg].heading);
-        if (iabs(diff) > 22000 && car_speed(player) > 300 && player->mode == CAR_GROUND) g->wrong_steps++;
+        // Wrong way follows motion, including reverse gear, within a
+        // roughly 120-degree backward cone relative to the road tangent.
+        const TrackPt *p = &t->pts[hit.seg];
+        s32 speed = car_speed(player);
+        s32 along = (player->vx * p->ux + player->vz * p->uz) >> 14;
+        if (speed > 300 && along * 2 < -speed && player->mode == CAR_GROUND) g->wrong_steps++;
         else g->wrong_steps = 0;
         g->wrong_way = g->wrong_steps > 45;
+    } else {
+        // Without a segment there is no meaningful course direction.
+        // Clear the warning and the pending streak before road reacquisition.
+        g->wrong_steps = 0;
+        g->wrong_way = 0;
     }
     if (!started) return;
 
-    if (g->state == RS_RACING) {
+    s32 racing = g->state == RS_RACING;
+    if (racing) {
         g->lap_steps++;
         g->total_steps++;
         if (g->extend_flash > 0) g->extend_flash--;
         if (g->mode == RACE_ARCADE) {
             if (g->time_left > 0) g->time_left--;
             if (g->time_left > 0 && g->time_left <= 600 && g->time_left % 60 == 0) sound_play(SFX_BEEP);
-            if (g->time_left == 0) {
-                g->state = RS_TIMEOVER;
-                g->end_timer = 0;
-                game_message("TIME OVER", "", PAL_RED, 600);
-                sound_play(SFX_FAIL);
-            }
         }
         // Half-lap checkpoint.
         if (g->progress >= g->lap * t->lap + t->lap / 2 && g->cp_given <= g->lap && g->lap < g->laps) {
@@ -320,10 +515,10 @@ void race_step(Car *player, s32 started)
             if (g->lap < MAX_LAPS) g->lap_times[g->lap] = g->lap_steps;
             if (!g->best_lap || g->lap_steps < g->best_lap) g->best_lap = g->lap_steps;
             char a[24], b[24];
-            s32 record = !recs.best_lap[g->track] || g->lap_steps < recs.best_lap[g->track];
+            s32 record = !records->best_lap[record_index] || g->lap_steps < records->best_lap[record_index];
             put_race_time(put(b, record ? "BEST LAP " : "LAP "), g->lap_steps);
             if (record) {
-                recs.best_lap[g->track] = g->lap_steps;
+                records->best_lap[record_index] = g->lap_steps;
                 g->new_best_lap = 1;
             }
             g->lap++;
@@ -332,8 +527,8 @@ void race_step(Car *player, s32 started)
                 g->state = RS_GOAL;
                 g->end_timer = 0;
                 if (g->mode == RACE_ARCADE &&
-                    (!recs.best_race[g->track] || g->total_steps < recs.best_race[g->track])) {
-                    recs.best_race[g->track] = g->total_steps;
+                    (!records->best_race[record_index] || g->total_steps < records->best_race[record_index])) {
+                    records->best_race[record_index] = g->total_steps;
                     g->new_best_race = 1;
                 }
                 game_message("GOAL!", b, PAL_YELLOW, 600);
@@ -349,7 +544,16 @@ void race_step(Car *player, s32 started)
                 sound_play(record ? SFX_BEST : SFX_LAP);
             }
             if (record || g->state == RS_GOAL)
-                save_blob(REC_MAGIC, RACE_SAVE_AT, &recs, sizeof(recs));
+                race_records_save(g->track);
+        }
+        // A checkpoint or lap reached on the last clock tick still counts.
+        // Resolve those crossings first, then end only an unfinished race
+        // whose clock remains empty after any earned time extension.
+        if (g->mode == RACE_ARCADE && g->state == RS_RACING && g->time_left == 0) {
+            g->state = RS_TIMEOVER;
+            g->end_timer = 0;
+            game_message("TIME OVER", "", PAL_RED, 600);
+            sound_play(SFX_FAIL);
         }
     } else {
         g->end_timer++;
@@ -359,7 +563,39 @@ void race_step(Car *player, s32 started)
     s32 pos = 1;
     for (s32 i = 0; i < RIVALS && g->mode == RACE_ARCADE; i++)
         if ((rivals[i].s >> 8) > g->progress) pos++;
-    if (g->state == RS_RACING) g->position = pos;
+    // At the flag, classify by crossing time, not distance driven after it.
+    if (racing && g->state == RS_GOAL && g->mode == RACE_ARCADE) {
+        s32 goal = g->laps * t->lap, goal_q8 = goal * 256;
+        long long player_need = goal - player_before;
+        long long player_move = g->progress - player_before;
+        // Credit is integral and can jump at a route's closing seam. Use
+        // the actual Q8 movement across the start point's perpendicular
+        // plane when available, retaining all dot-product precision.
+        // The credit rules above still decide whether this lap is earned.
+        const TrackPt *line = &t->pts[0];
+        s32 lx = line->x * 256, lz = line->z * 256;
+        long long side_before = (long long)(x_before - lx) * line->ux +
+                                (long long)(z_before - lz) * line->uz;
+        long long side_after = (long long)(previous_x - lx) * line->ux +
+                               (long long)(previous_z - lz) * line->uz;
+        if (side_before <= 0 && side_after >= 0 && side_after > side_before) {
+            player_need = -side_before;
+            player_move = side_after - side_before;
+        }
+        pos = 1;
+        for (s32 i = 0; i < RIVALS; i++) {
+            s32 before = rival_before[i], after = rivals[i].s;
+            if (before >= goal_q8) pos++;
+            else if (after >= goal_q8 && player_need > 0 && player_move > 0) {
+                // Compare fractions of this step without division. Exact
+                // ties favor the player, as with the strict running order.
+                if ((long long)(goal_q8 - before) * player_move <
+                    (long long)player_need * (after - before)) pos++;
+            }
+        }
+    }
+    // Include movement on the goal tick, then freeze the finishing place.
+    if (racing) g->position = pos;
 }
 
 s32 race_done(void)
@@ -385,7 +621,7 @@ void race_draw_rivals(void)
         if (depth[i] < 0) continue;
         const Rival *r = &rivals[i];
         s32 d = i == near0 ? depth[i] : depth[i] < 320 ? 320 : depth[i];
-        car_draw_rival(r->x, r->y >> 8, r->z, r->heading, r->pitch, r->color, d);
+        car_draw_rival(r->x, r->y >> 8, r->z, r->heading, r->pitch, r->roll, r->color, d);
     }
 }
 
@@ -395,7 +631,16 @@ void race_hud(const Car *car, s32 frame)
 {
     const Race *g = &g_race;
     char buf[24], *p;
-    if (g->mode == RACE_ARCADE) {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = g->track>=TRACK_VRD_FIRST;
+#else
+    s32 study = 0;
+#endif
+    if(study){
+        hud_text(6,3,"32X ROAD STUDY",0,PAL_YELLOW);
+        hud_text_right(236,3,"FREE DRIVE",0,PAL_CYAN);
+        hud_text_right(236,13,"NO LAP RESULTS",0,PAL_WHITE);
+    }else if (g->mode == RACE_ARCADE) {
         hud_text_centered(3, "TIME", 0, PAL_YELLOW);
         s32 secs = (g->time_left + 59) / 60;
         put_num(buf, secs);
@@ -412,6 +657,7 @@ void race_hud(const Car *car, s32 frame)
     } else {
         hud_text(6, 3, "FREE RUN", 0, PAL_YELLOW);
     }
+    if (!study) {
     s32 lap = g->lap + 1 > g->laps ? g->laps : g->lap + 1;
     p = put(buf, "LAP ");
     p = put_num(p, lap);
@@ -425,6 +671,7 @@ void race_hud(const Car *car, s32 frame)
         put_race_time(p, best);
         hud_text_right(236, 23, buf, 0, PAL_CYAN);
     }
+    }
 
     // Speed and revs, bottom right.
     s32 mph = (car_speed(car) * 67) / 2560;
@@ -432,7 +679,7 @@ void race_hud(const Car *car, s32 frame)
     hud_text_right(212, 140, buf, 1, PAL_YELLOW);
     hud_text(216, 146, g_opt[OPT_UNITS] ? "KMH" : "MPH", 0, PAL_YELLOW);
     hud_tach(160, 130, car->rpm);
-    if (g->wrong_way && (frame & 16)) hud_text_centered(98, "WRONG WAY", 1, PAL_RED);
+    if (!study && g->wrong_way && (frame & 16)) hud_text_centered(98, "WRONG WAY", 1, PAL_RED);
 }
 
 // ---------------------------------------------------------------- results
@@ -447,6 +694,10 @@ void race_results(void)
     for (s32 i = 0; i < 12; i++) { lp[i] = left[i]; rp[i] = right[i]; hi[i] = 0; }
     put(left[n], "COURSE");
     put(right[n++], g_tracks[g->track].name);
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    put(left[n], "COURSE SET");
+    put(right[n++], track_set_name(g->track / TRACKS_PER_SET));
+#endif
     if (g->mode == RACE_ARCADE) {
         put(left[n], "POSITION");
         if (g->state == RS_GOAL) { char *p = put_num(right[n], g->position); put(p, ordinals[g->position - 1]); }

@@ -251,6 +251,7 @@ static u16 pressed_keys(u16 *prev)
 
 static void show_track(s32 i)
 {
+    if (i < 0 || i >= TRACK_COUNT) i = 0;
     if (g_track != &g_tracks[i]) {
         track_load(i);
         options_apply();
@@ -260,6 +261,8 @@ static void show_track(s32 i)
 static void title_screen(s32 *t)
 {
     u16 prev = ~REG_KEYINPUT;
+    char courses[40];
+    put(put_num(courses, TRACK_COUNT), " COURSES  7 RIVALS  STUNT CITY");
     sound_silence();
     show_track(0);
     for (;;) {
@@ -270,7 +273,7 @@ static void title_screen(s32 *t)
         hud_text_huge(26, "NO TRACIN'", PAL_YELLOW);
         hud_text_centered(56, "VIRTUA EDITION", 1, PAL_WHITE);
         if ((*t >> 5) & 1) hud_text_centered(112, "PRESS START", 1, PAL_YELLOW);
-        hud_text_centered(148, "3 COURSES  7 RIVALS  STUNT CITY", 0, PAL_WHITE);
+        hud_text_centered(148, courses, 0, PAL_WHITE);
         present();
         (*t)++;
     }
@@ -291,6 +294,8 @@ static s32 mode_select(s32 *t, s32 *sel)
         { "GAME SETUP", "" }, { "STUNT RECORDS", "" },
     };
     u16 prev = ~REG_KEYINPUT;
+    char courses[16];
+    put(put_num(courses, TRACK_COUNT), " COURSES");
     for (;;) {
         u16 p = pressed_keys(&prev);
         if (p & KEY_UP)   { *sel = (*sel + MODE_COUNT - 1) % MODE_COUNT; sound_play(SFX_BEEP); }
@@ -310,7 +315,7 @@ static s32 mode_select(s32 *t, s32 *sel)
         box(page, 130, 36, 230, 84, C_PANEL, C_CYAN);
         hud_text(138, 44, about[*sel][0], 0, PAL_CYAN);
         hud_text(138, 56, about[*sel][1], 0, PAL_WHITE);
-        if ((*t >> 4) & 1 && *sel < 2) hud_text(138, 72, "3 COURSES", 0, PAL_YELLOW);
+        if ((*t >> 4) & 1 && *sel < 2) hud_text(138, 72, courses, 0, PAL_YELLOW);
         hud_text_centered(150, "A SELECT  B BACK", 0, PAL_WHITE);
         present();
         (*t)++;
@@ -320,12 +325,28 @@ static s32 mode_select(s32 *t, s32 *sel)
 // Returns the circuit to race on, or -1 for back.
 static s32 course_select(s32 *t, s32 *sel, s32 mode)
 {
-    static const u8 level_pal[TRACK_COUNT] = { PAL_GREEN, PAL_YELLOW, PAL_RED };
+    static const u8 level_pal[TRACK_VRD_COUNT] = { PAL_GREEN, PAL_YELLOW, PAL_RED, PAL_CYAN, PAL_WHITE };
+    if (*sel < 0 || *sel >= TRACK_COUNT) *sel = 0;
     u16 prev = ~REG_KEYINPUT;
     for (;;) {
         u16 p = pressed_keys(&prev);
-        if (p & KEY_LEFT)  { *sel = (*sel + TRACK_COUNT - 1) % TRACK_COUNT; sound_play(SFX_BEEP); *t = 0; }
-        if (p & KEY_RIGHT) { *sel = (*sel + 1) % TRACK_COUNT; sound_play(SFX_BEEP); *t = 0; }
+        s32 set = *sel / TRACKS_PER_SET, course = *sel % TRACKS_PER_SET;
+#ifdef WITH_VRD_32X_TRACKS
+        if (*sel >= TRACK_VRD_FIRST){set=TRACK_SET_VRD;course=*sel-TRACK_VRD_FIRST;}
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+        if (p & (KEY_L | KEY_R)) {
+            set = (set + 1) % TRACK_SET_COUNT;
+            if(course >= track_set_count(set)) course=0;
+            sound_play(SFX_BEEP);
+            *t = 0;
+        }
+#endif
+        s32 choices=track_set_count(set);
+        if (p & KEY_LEFT)  { course = (course + choices - 1) % choices; sound_play(SFX_BEEP); *t = 0; }
+        if (p & KEY_RIGHT) { course = (course + 1) % choices; sound_play(SFX_BEEP); *t = 0; }
+        s32 first = set * TRACKS_PER_SET;
+        *sel = first + course;
         if (p & KEY_B) return -1;
         if (p & (KEY_A | KEY_START)) { sound_play(SFX_START); return *sel; }
         show_track(*sel);
@@ -334,42 +355,71 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
         scene_frame(*t);
         volatile u16 *page = back_page();
         hud_begin();
+        #ifdef WITH_VRD_32X_TRACKS
+        header(page,set==TRACK_SET_VRD ? "32X FREE DRIVE" : mode == MODE_ARCADE ? "ARCADE" : "FREE RUN");
+#else
         header(page, mode == MODE_ARCADE ? "ARCADE" : "FREE RUN");
-        for (s32 i = 0; i < TRACK_COUNT; i++) {
-            s32 x0 = 4 + i * 78, on = i == *sel;
-            box(page, x0, 34, x0 + 76, 50, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
-            hud_text(x0 + 38 - hud_text_width(g_tracks[i].name, 0) / 2, 39, g_tracks[i].name, 0,
+#endif
+        panel(page, 0, 29, SCREEN_W, 40, C_PANEL);
+        hud_text_centered(31, track_set_name(set), 0, PAL_CYAN);
+#ifdef WITH_VR_ORIGINAL_TRACKS
+        hud_text(10, 31, "L", 0, PAL_YELLOW);
+        hud_text_right(230, 31, "R", 0, PAL_YELLOW);
+#endif
+        for (s32 i = 0; i < choices; i++) {
+            s32 stride=230/choices, x0=4+i*stride, on=i==course;
+            const char *name = g_tracks[first + i].name;
+#ifdef WITH_VRD_32X_TRACKS
+            char shortname[8];
+            if(set==TRACK_SET_VRD) { shortname[0]='S';shortname[1]='L';shortname[2]='O';shortname[3]='T';shortname[4]=' ';shortname[5]='0'+i;shortname[6]=0; name=shortname; }
+#endif
+            box(page, x0, 44, x0 + stride-2, 60, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
+            hud_text(x0 + stride/2 - hud_text_width(name, 0) / 2, 49, name, 0,
                      on ? PAL_YELLOW : PAL_WHITE);
         }
         // Course map with a dot following the camera, and the course facts.
-        box(page, 6, 56, 116, 142, C_PANEL, C_CYAN);
-        track_map(page, *sel, 10, 60, 102, 78, C_WHITE, (*t * FLY_SPEED) % td->lap, C_YELLOW);
-        box(page, 122, 56, 234, 142, C_PANEL, C_CYAN);
+        box(page, 6, 66, 116, 142, C_PANEL, C_CYAN);
+        track_map(page, *sel, 10, 70, 102, 68, C_WHITE, (*t * FLY_SPEED) % td->lap, C_YELLOW);
+        box(page, 122, 66, 234, 142, C_PANEL, C_CYAN);
         char buf[24], *q;
-        hud_text(130, 62, td->level, 0, level_pal[*sel]);
+        hud_text(130, 72, td->level, 0, level_pal[course]);
+#ifdef WITH_VRD_32X_TRACKS
+        if(set==TRACK_SET_VRD){
+            hud_text(130, 86, "BSP ROAD DATA", 0, PAL_WHITE);
+            hud_text(130, 100, "SAMPLED HEIGHT", 0, PAL_CYAN);
+            hud_text(130, 114, "NO LAP RECORDS", 0, PAL_WHITE);
+            hud_text(130, 130, "ROUTE UNVERIFIED", 0, PAL_YELLOW);
+        } else
+#endif
+        {
         q = put(buf, "LAPS ");
         if (mode == MODE_ARCADE) put_num(q, td->laps); else put(q, "FREE");
-        hud_text(130, 76, buf, 0, PAL_WHITE);
+        hud_text(130, 84, buf, 0, PAL_WHITE);
         q = put(buf, "LENGTH ");
         q = put_num(q, td->lap / 20 / 1000);
         q = put(q, ".");
         q = put_num(q, (td->lap / 20 / 100) % 10);
         put(q, " KM");
-        hud_text(130, 88, buf, 0, PAL_WHITE);
-        hud_text(130, 102, "BEST LAP", 0, PAL_CYAN);
+        hud_text(130, 96, buf, 0, PAL_WHITE);
+        hud_text(130, 110, "BEST LAP", 0, PAL_CYAN);
         s32 b = race_best_lap(*sel);
         if (b) { q = put_num(buf, b / 3600); *q++ = '\''; *q++ = '0' + (b / 60 % 60) / 10; *q++ = '0' + b / 60 % 10;
                  *q++ = '"'; *q++ = '0' + (b % 60 * 100 / 60) / 10; *q++ = '0' + (b % 60 * 100 / 60) % 10; *q = 0; }
         else put(buf, "--");
-        hud_text_right(228, 102, buf, 0, PAL_WHITE);
-        hud_text(130, 116, "BEST RACE", 0, PAL_CYAN);
+        hud_text_right(228, 110, buf, 0, PAL_WHITE);
+        hud_text(130, 122, "BEST RACE", 0, PAL_CYAN);
         b = race_best_time(*sel);
         if (b) { q = put_num(buf, b / 3600); *q++ = '\''; *q++ = '0' + (b / 60 % 60) / 10; *q++ = '0' + b / 60 % 10;
                  *q++ = '"'; *q++ = '0' + (b % 60 * 100 / 60) / 10; *q++ = '0' + (b % 60 * 100 / 60) % 10; *q = 0; }
         else put(buf, "--");
-        hud_text_right(228, 128, buf, 0, PAL_WHITE);
-        hud_text(10, 150, "< >", 0, (*t >> 3) & 1 ? PAL_YELLOW : PAL_WHITE);
+        hud_text_right(228, 132, buf, 0, PAL_WHITE);
+        }
+        hud_text(10, 150, "< > COURSE", 0, (*t >> 3) & 1 ? PAL_YELLOW : PAL_WHITE);
+#ifdef WITH_VRD_32X_TRACKS
+        hud_text_right(234, 150, set==TRACK_SET_VRD ? "A DRIVE  B BACK" : "A RACE  B BACK", 0, PAL_WHITE);
+#else
         hud_text_right(234, 150, "A RACE  B BACK", 0, PAL_WHITE);
+#endif
         present();
         (*t)++;
     }
@@ -547,6 +597,11 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
     Car *car = &g_car;
     track_load(track);
     options_apply();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (track >= TRACKS_PER_SET)
+        r_set_far(FAR_MIN_VR_TRACK, FAR_MAX_VR_TRACK, FOG1_VR_TRACK, FOG2_VR_TRACK);
+    else
+#endif
     if (track >= 0) r_set_far(FAR_MIN_TRACK, FAR_MAX_TRACK, FOG1_TRACK, FOG2_TRACK);
     else r_set_far(FAR_MIN_CITY, FAR_MAX_CITY, FOG1_CITY, FOG2_CITY);
     game_reset();
@@ -595,8 +650,6 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
 
         // Fixed 60 Hz physics, however long the last frame took to draw.
         // Game speed and air slow-mo stretch or shrink the step.
-        if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
-        car->boost = (((keys & KEY_R) && g_game.nitro > 0) || edit_boosting()) && countdown <= 0 && car->mode != CAR_CRASH;
         u32 now = cycles();
         acc += now - last;
         last = now;
@@ -605,6 +658,10 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
             u32 len = step_len[g_opt[OPT_SPEED]];
             if (g_opt[OPT_SLOWMO] && car->mode == CAR_AIR) len *= 3;
             if (acc < len || steps >= 4) break;
+            // Fuel, countdown, crashes and race state can change between
+            // steps sharing this draw. Resolve their controls every step.
+            if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
+            car->boost = (((keys & KEY_R) && g_game.nitro > 0) || edit_boosting()) && countdown <= 0 && car->mode != CAR_CRASH;
             if (countdown > 0) {
                 // Hold the car on the line; the gas still revs the engine.
                 if (countdown % 60 == 0) sound_play(SFX_BEEP);
@@ -630,7 +687,13 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
             acc -= len;
             steps++;
         }
-        if (steps == 4) acc = 0;
+        if (steps == 4) {
+            // Bound a genuine overload without throwing away the fractional
+            // time that normally carries into the next rendered frame.
+            u32 len = step_len[g_opt[OPT_SPEED]];
+            if (g_opt[OPT_SLOWMO] && car->mode == CAR_AIR) len *= 3;
+            if (acc >= len) acc %= len;
+        }
         label_timer -= steps;
         if (g_new_best) {
             g_new_best = 0;
@@ -709,7 +772,13 @@ int main(void)
             for (;;) {
                 s32 c = course_select(&t, &course, m);
                 if (c < 0) break;
-                while (play(-1, c, m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE, 0)) {}
+                // Staging routes are skeleton-derived and lack verified lap
+                // endpoints. 32X studies are therefore free-drive only.
+                while (play(-1, c,
+#ifdef WITH_VRD_32X_TRACKS
+                    c>=TRACK_VRD_FIRST ? RACE_FREE :
+#endif
+                    m == MODE_ARCADE ? RACE_ARCADE : RACE_FREE, 0)) {}
                 show_track(course);
                 t = 0;
             }

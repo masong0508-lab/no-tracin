@@ -2,7 +2,7 @@
 
 A stunt-driving game for the Game Boy Advance: Race Drivin' (Genesis) mixed with Payback (GBA) and Virtua Racing. You drive a flat-shaded 3D city, Freedom City, with a Stunt Park (a loop, a banked curve and a canal jump), street ramps, tricks, stars to find and cheat codes. The Virtua Edition adds three race circuits in the style of Virtua Racing's courses, an arcade race against seven CPU cars, and a Virtua-style menu.
 
-Everything in the game is drawn and played by its own code. No code, graphics or sound from either original ROM is in it, so `notracin.gba` can be shared. The original ROMs you own are not part of this folder and should not be shared.
+The standard `notracin.gba` build uses this project's own code and assets. The optional original-course build described below imports course data from a locally supplied Virtua Racing ROM. Source ROMs and generated imported assets are kept outside the tracked source tree.
 
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
@@ -31,7 +31,7 @@ Hold A during the 3-2-1 countdown to rev the engine.
 - **Cameras:** Chase, Far Chase, Overhead, Cockpit. The chase cameras look into turns, pull back with speed, watch the loop from the side, and shake on hard landings and crashes.
 
 ## Circuits
-Three courses laid out after Virtua Racing's (rebuilt by hand from the corner order, hills and landmarks; no data comes from that game):
+The standard build has three custom courses inspired by Virtua Racing's corner order, hills and landmarks:
 
 | Course | Level | What's on it |
 |---|---|---|
@@ -39,8 +39,8 @@ Three courses laid out after Virtua Racing's (rebuilt by hand from the corner or
 | Bay Bridge | Medium | Harbour straight with cranes, a climb onto a suspension bridge over the bay, a city chicane and S-bends down the waterfront, a lighthouse |
 | Acropolis | Expert | Climbing esses up to the temple hairpin, a long downhill, a double-apex right, a switchback and a last tight hairpin before the line |
 
-- **Arcade:** 4 laps against seven CPU cars, starting last on the grid. The clock counts down; the half-lap checkpoint and each lap line add time. Run out and it's TIME OVER. After the flag you get your position, total time and lap times.
-- **Free Run:** the course to yourself, no clock, as many laps as you like.
+- **Arcade:** 3 laps against seven CPU cars, starting last on the grid. The clock counts down; the half-lap checkpoint and each lap line add time. Run out and it's TIME OVER. After the flag you get your position, total time and lap times.
+- **Free Run:** the course to yourself, no clock, as many laps as you like. CPU-opponent route setup and opponent simulation are skipped entirely.
 - Off the road, the grass slows you right down; the barriers keep you on the circuit.
 - Best laps and best race times are saved for each course.
 - In a race, START pauses (Resume, Restart Race, Options, Quit to Menu).
@@ -87,7 +87,7 @@ Pause, choose CHEATS and press the buttons in order. Type a code again to turn i
 - Records: best lap, high score, stunts, loops, longest jump, most airtime, top speed, crashes, time played, stars and tricks.
 
 ## Physics
-- Fixed 60 steps per second whatever the frame rate, so jumps and the loop behave the same at any speed of drawing.
+- Normal-speed physics uses one step per native GBA video-frame interval (about 59.73 steps per second), independently of drawing. Each draw can catch up at most four steps; genuine overload drops whole excess steps while retaining fractional time. Turbo, Chill and air slow-mo change the step interval.
 - Engine with a power curve and a six-speed automatic gearbox, brakes, reverse, air drag and rolling resistance. Top speed is about 92 mph on Stock.
 - Tyre grip: past the limit the car slides. Too much steering at speed understeers, the handbrake lets the tail out, and a sliding car swings back toward its path.
 - Gravity pulls you down slopes, which helps round the banked curve.
@@ -97,7 +97,7 @@ Pause, choose CHEATS and press the buttons in order. Type a code again to turn i
 - Crashes: a wall above about 45 mph or a hard landing sends the car tumbling; the canal sinks it. It resets after a short wait, or use Reset Car.
 
 ## Look and sound
-- Sky gradient, a two-layer city skyline that turns with the camera, and distance haze. It holds 30 fps; on the busiest views the draw distance pulls in a little and the haze hides the edge.
+- Sky gradient, a two-layer city skyline that turns with the camera, and distance haze. Busy views reduce the draw distance; measured rendering rates depend on the course and physics settings.
 - A detailed car with a shadow that follows ramps and banks.
 - Effects: tyre smoke, burnout smoke, skid marks, dust, sparks, nitro flames, fire and black smoke after a wreck, and a splash in the canal.
 - Sound on the GBA's four built-in channels: engine following the revs through the gears, tyre squeal, wind in the air and on nitro, landing thumps, crashes, splashes, and jingles for stunts, checkpoints, laps and the countdown. There is no music yet.
@@ -109,6 +109,102 @@ The game is C with a little ARM assembly. No devkitPro is needed.
 3. `make clean` removes the build.
 
 The project has its own startup code (`src/crt0.s`) and linker script (`gba.ld`). Speed-critical code runs from the GBA's fast internal RAM as ARM code (marked `IWRAM_CODE`), and the linker script puts the division routines there too. `tools/fixheader.py` fills in the ROM header checksum.
+
+### Optional original Virtua Racing courses
+
+The standard build keeps the three custom courses and Stunt City. An optional
+local import adds the original Mega Drive **Big Forest, Bay Bridge and Acropolis**
+as a second course set. It reads the original meshes, native road routes,
+collision surfaces and height planes from your own source ROM.
+
+```sh
+make vr-original VR_ROM="/path/to/Virtua Racing (USA).md"
+```
+
+The result is `build/vr-original/notracin-vr-original.gba`. Open it in a GBA
+emulator with the existing skip-BIOS-intro setting. Choose **Arcade** or
+**Free Run**, then press **L/R** on the course screen to switch between
+**CUSTOM COURSES** and **VR ORIGINALS**. Left/right selects one of the three
+courses in that set. Boot still starts with the custom set, and Stunt City
+remains a separate choice. Original and custom best times use separate save
+records; existing custom saves keep their original layout.
+
+The first supported source is the 2,097,152-byte US revision, product
+`MK-1229 -00`, with SHA-256
+`291e74f9b4d5a2c0f2b7cbf6f2e0fbf72c16cb6d83b1f58dda78209f9a64c486`.
+The importer verifies the complete file before reading its tables. A different
+revision needs its own verified offsets; renaming a file does not select one.
+
+This course pack uses No Tracin's car, controls, opponents and race rules.
+Original geometry is converted at one uniform scale; source colors are mapped
+to the existing GBA palette and themes. Pit-lane geometry is present, while
+pit-service behaviour and alternate-route race logic are future engine work.
+The Mega Drive ROM itself is not modified by this build.
+
+Generated headers, the imported build and its provenance manifest stay under
+`build/`. The source repository contains the importer and runtime integration.
+Keep source ROMs in `roms/` or outside the checkout. See
+[the ROM research notes](docs/ROM_RESEARCH.md) for the recovered formats,
+validation and the next engine milestones.
+
+Run the source-only regression checks with `make test`. To additionally check
+the verified source ROM, set `VR_ROM` when running the Python tests.
+
+The pack skips repeated copies of identical source scenery, aligns opponents
+to banks, and fixes checkpoint/finish-tick race transitions, lapped traffic
+and persistent soft-body drafting. The current update also keeps controls and
+physics timing consistent between draws, handles the reproduced impact-force
+overflows, follows actual movement for wrong-way warnings, ranks close finishes
+by crossing order, and restores earned progress on crash recovery.
+See [the current driving validation](docs/DRIVING_CONSISTENCY_VALIDATION.md)
+for the tested binary, harder driving runs and coverage limits,
+[the traffic milestone](docs/RACE_TRAFFIC_VALIDATION.md), and
+[the earlier renderer measurements](docs/ORIGINAL_COURSES_CONTINUATION.md).
+
+### Original Mega Drive response options
+
+The native-engine tool independently selects the original US game's drive
+response and digital steering ramp. It runs the original 68000/SVP engine
+and retains the original courses. Each supported combination has a verified
+complete-file hash; the original steering cap and release behavior stay intact.
+
+| Drive divisor | Steering step | Result |
+|---|---|---|
+| 225 | 32 | Exact original settings |
+| 180 | 32 | Stronger acceleration/braking response; previous default patch |
+| 225 | 48 | Quicker steering response with original drive response |
+| 180 | 48 | Stronger drive response and quicker steering together |
+
+The strict patcher verifies the original image and writes a separate output.
+For the combined setting:
+
+```sh
+python3 tools/patch_vr_response.py \
+  "roms/Virtua Racing (USA).md" \
+  "build/vr-physics/vr-us-response180-steering48.bin" \
+  --drive-divisor 180 --steering-step 48 \
+  --ips build/vr-physics/vr-us-response180-steering48.ips
+```
+
+Use a Mega Drive emulator with Virtua Racing/SVP support for this `.bin` file.
+Omitting selection flags retains the previous 180/32 output exactly. Restore
+detects any supported modified profile without selection flags:
+
+```sh
+python3 tools/patch_vr_response.py \
+  "build/vr-physics/vr-us-response180-steering48.bin" \
+  "build/vr-physics/vr-us-restored.bin" --restore
+```
+
+These are measured response options; a replacement physics model remains
+future work. [The selectable-control validation](docs/VR_CONTROLS_VALIDATION.md)
+documents original-CPU execution, all four profiles on all three courses,
+exact restoration and the observed player/demo scope. The
+[two-player continuation](docs/NATIVE_TWO_PLAYER_VALIDATION.md) verifies both
+controllers in the original split-screen mode across those same profiles and
+courses. The
+[first physics experiment](docs/VR_PHYSICS_RESEARCH.md) preserves the earlier
+longitudinal-response research.
 
 ## Source files
 | File | What's in it |
@@ -133,11 +229,108 @@ The project has its own startup code (`src/crt0.s`) and linker script (`gba.ld`)
 ## Status and what's next
 Done: the 3D engine and city, stunt physics, the look and feel pass, options and saves, tricks, nitro, stars and cheats.
 
-Circuits run at 20 to 30 fps (Acropolis, with the most hills, sits nearer 20).
+The optional original-course pack adds source meshes, native terrain and road
+routes while retaining No Tracin's driving and race systems. See the
+[current validation notes](docs/RACE_TRAFFIC_VALIDATION.md) for measured
+performance and the limits of the current testing. Independently selectable
+[native Mega Drive steering and drive responses](docs/VR_CONTROLS_VALIDATION.md)
+are also implemented and tested.
 
 Planned next:
-- Race mode: a countdown timer that checkpoints extend, and a speed track through the city.
+- Course expansion: larger track formats, alternate routes and functional pits.
 - City life: traffic, pedestrians and cops that chase you.
 - A Payback-style HUD with hearts, lives and a minimap.
 - Missions with a city map, and save slots for progress.
 - Music.
+
+### Experimental classic driving profiles and upcoming Sega 32X support
+
+**Options → HANDLING** now offers **SOFT-BODY**, **ARCADE**, **HARD STYLE** and
+**RACE STYLE**. The last two use separate lightweight GBA-native steering,
+slip and yaw response models inspired by early 3D driving simulators. They
+are **not** a port of the original Atari Hard Drivin'/Race Drivin' ROM code;
+that original code has not been recovered. The existing modes and system-save
+layout are unchanged. See [32X and classic physics roadmap](docs/32X_AND_CLASSIC_PHYSICS_ROADMAP.md)
+for proven capabilities and the remaining code-research work.
+
+The supplied Sega Genesis/SVP import and its three original courses remain
+unchanged. The Sega **32X Virtua Racing Deluxe** ROM has now been supplied
+and its US cartridge header and full-file hash independently verified, but its
+course geometry is **not imported yet**. Use the read-only
+`python3 tools/audit_uploaded_cartridges.py --require-known /path/to/your/rom.32x`
+to verify the exact image without rewriting it. Deluxe's two extra courses, alternate roads,
+three vehicle classes and additional scenery will require a separate
+version-verified importer and updated course-selection data structures.
+
+### Independent Motion Physics — gravity, loops and falling
+
+Options now has **two independent settings**, not four interchangeable
+physics engines. **HANDLING** (Soft-Body / Arcade / Hard Style / Race Style)
+changes steering and tires. **MOTION PHYS** (Original / Newton) changes
+stunt dynamics. The Newton option uses radial support on loops
+`N/m = v^2/R + g cos(theta)`: slow cars lose contact and **fall ballistically**
+without a scripted wreck, while fast cars stay attached. Arcade-model landing
+response uses a surface-normal impulse, preserving tangential momentum on
+slopes. Soft-Body already has its own full node-and-spring ground contacts.
+Normal driving and the original option retain their previous behavior.
+
+This is **our new Newton-inspired physics implementation**, not an exact
+copy of the original Race Drivin' physics routines. The supplied 1993 US
+Sega Genesis Race Drivin' ROM is verified and preserved; its 68000 code is
+not yet traced to the original Atari car dynamics. The supplied 32X Deluxe
+cartridge is also identified, but its additional courses await format
+analysis. See [Motion Physics and ROM validation](docs/NEWTON_MOTION_AND_ROM_INPUTS.md).
+
+### 32X and Race Drivin' ROM tracing: verified first-stage data
+
+The user-supplied US Virtua Racing Deluxe 32X cartridge now has an audited
+**six-slot normal plus one-slot alternate** 68000 road lookup. An important
+correction to the early investigation: data pointers map through the
+`$900000–$9FFFFF` window with file offsets `address - $800000`, not the
+code window `address - $880000`. The original offset counts were invalid;
+the corrected tool verifies six coherent ROM-derived road outlines and
+1,770 count-delimited records containing 13,096 undecoded 14-word subrecords
+in five normal slots plus the alternate slot. Normal slot 5 does not use
+that record grammar and remains unresolved. The read-only tools are
+`tools/inspect_vrd_32x_tables.py` and `tools/inspect_vrd_32x_records.py`. This is *not yet* a five-course 3D
+geometry importer, and the table slots are not labeled as tracks without
+runtime verification. The verified Race Drivin' Genesis image can be
+inspected with `tools/trace_racedrivin_genesis.py` to inventory tentative
+68000 math/call sites; no original Atari physics routine is claimed yet.
+
+The independently selectable **Motion Physics: Newton** now also conserves
+the loop's lateral tangent velocity and residual movement on both forward
+completion and backward exit. It keeps the prior behavior for **Original**
+motion. See [ROM tracing and Newton validation](docs/ROM_TRACING_AND_LOOP_MOMENTUM_20261122.md).
+
+### 32X Deluxe road-region and terrain-height decoding (source-only)
+
+The read-only 32X inspector has advanced beyond counted records. A tested
+interpreter now follows the exact 68000 **BSP road-boundary decisions and
+surface height plane equations**, sampling all five verified normal lookup
+slots without guessing course labels. A separate offline exporter creates
+private, triangulated *study* road surfaces from the user-owned ROM. This is
+**not an imported playable five-course Deluxe edition**: the actual source
+mesh, route progression, start lines, scenery and vertical-unit conversion
+still require further work. The standalone ROMs and both Handling and Motion
+Physics settings remain unchanged in this source-only milestone. Details:
+[32X BSP and height research](docs/32X_BSP_HEIGHT_SURFACE_DECODE.md).
+
+### Optional five-environment 32X road-study free-drive build
+
+The **private** `make vr-deluxe-study VR_ROM=... VR32X_ROM=...` build now adds
+**32X ROAD STUDIES** as a third course set. Press L/R in Arcade or Free Run
+to select it, then choose SLOT 0 through SLOT 4. The game switches these
+study environments to FREE DRIVE, with no fictional lap or race records.
+Their 2D road masks, sampled height planes, terrain collision and simple
+bounded road polygons are derived from the exact privately supplied US 32X
+ROM; their staging loops and vertical scaling are experimental. **These are
+not authentic, named Highland/Sand Park/etc. complete ports**. Standard and
+Genesis-only builds need no 32X data, scientific Python packages, heap or
+additional framebuffer. See
+[the 32X road-study implementation and test report](docs/32X_GBA_ROAD_STUDY_VALIDATION.md).
+
+The new five 32X studies also passed 10 additional real mGBA controller
+smoke tests with **Newton Motion** paired independently with **Arcade** and
+**Race Style** handling on all five slots. These do not establish original
+Sega 32X car physics or completed competitive races.

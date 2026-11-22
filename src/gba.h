@@ -81,6 +81,12 @@ enum {
 #define FAR_MAX_TRACK  2400
 #define FOG1_TRACK     1000
 #define FOG2_TRACK     1600
+// The imported courses have many more mesh faces per world unit. Their
+// adaptive range keeps driving responsive without changing the map data.
+#define FAR_MIN_VR_TRACK 900
+#define FAR_MAX_VR_TRACK 1800
+#define FOG1_VR_TRACK    550
+#define FOG2_VR_TRACK    850
 #define FAR_MENU       1100     // title and menu flyovers
 
 typedef struct { s32 x, y, z; } Vec3;
@@ -140,5 +146,6 @@ s32  r_visible(s32 x, s32 z, s32 radius);
 // Projects a world point; returns its depth, or 0 when behind the camera.
 s32  r_project(s32 x, s32 y, s32 z, s32 *sx, s32 *sy);
 void r_flush(void);
+s32 r_faces_free(void);  // bounded mesh importers reserve room for the player
 
 #endif

@@ -12,6 +12,9 @@ void sb_reset(Car *c);                 // build a fresh frame at the car's pose
 void sb_invalidate(void);              // a new car: rebuild (and repair) on the next step
 void sb_park(void);                    // the arcade model has the car: re-place it on return
 s32  sb_valid(const Car *c);           // a frame is built for this car
+// Add horizontal velocity (Q8) to the owning car and its attached frame.
+// Other cars and detached parts are left alone.
+void sb_add_velocity(Car *c, s32 vx, s32 vz);
 void sb_step(Car *c, u16 keys);        // one physics step; writes the car's pose
 void sb_draw(const Car *c, const Mesh *body);   // the deformed body and its wheels
 

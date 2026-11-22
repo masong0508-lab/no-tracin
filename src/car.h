@@ -36,6 +36,20 @@ typedef struct {
     s32 load;               // tyre load, 256 = resting (light over crests)
 } Car;
 
+// Playable handling profiles. HARD/RACE STYLE are independent original-code
+// recreations, NOT extracted Atari Hard Drivin'/Race Drivin' routines.
+enum {
+    CAR_PHYS_SOFT_BODY, CAR_PHYS_ARCADE,
+    CAR_PHYS_HARD_STYLE, CAR_PHYS_RACE_STYLE,
+    CAR_PHYS_COUNT
+};
+extern s32 car_physics_profile;
+
+// Vertical motion/stunt dynamics independent of steering or tyre handling.
+// NEWTON is a new GBA-native model, not copied from Atari cartridge code.
+enum { CAR_MOTION_ORIGINAL, CAR_MOTION_NEWTON, CAR_MOTION_COUNT };
+extern s32 car_motion_profile;
+
 // Tunables the options menu changes.
 extern s32 car_g, car_grip, car_power, car_crashes;
 extern s32 cheat_fly, cheat_hop, cheat_glitch;
@@ -44,9 +58,9 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading);
 void car_respawn(Car *c);
 void car_step(Car *c, u16 keys);
 void car_draw(const Car *c, s32 ghost);
-// A CPU rival at (x, y, z) facing `heading` (65536 units), pitched by `pitch`
-// (1024 units); `depth` picks the detail.
-void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth);
+// A CPU rival at (x, y, z) facing `heading` (65536 units), with pitch and roll
+// in 1024-unit angles; `depth` picks the detail.
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 roll, s32 color, s32 depth);
 s32  car_speed(const Car *c);   // Q8 units per step, always positive
 
 #endif

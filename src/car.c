@@ -7,6 +7,7 @@
 #include "car.h"
 #include "world.h"
 #include "track.h"
+#include "race.h"
 #include "softbody.h"
 #include "tune.h"
 
@@ -26,6 +27,10 @@
 
 s32 car_g = 35, car_grip = 38, car_power = 28000, car_crashes = 1;
 s32 cheat_fly, cheat_hop, cheat_glitch;
+// Selectable, bounded GBA-native approximations of classic driving behavior.
+// No Atari arcade physics source ROM or machine code has been imported.
+s32 car_physics_profile;
+s32 car_motion_profile;
 
 static u32 rng = 12345;
 static s32 rnd(s32 n) { rng = rng * 1103515245 + 12345; return (rng >> 16) % n; }
@@ -48,7 +53,7 @@ static s32 engine_force(s32 v)
 static s32 surf(s32 x, s32 z, s32 base)
 {
     s32 h = world_height(x, z);
-    return h < (-100 << 8) ? base : h;
+    return h < (-(100 << 8)) ? base : h;
 }
 
 // Slope from one-sided differences, taking the gentler side so the edge of
@@ -79,8 +84,8 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
 {
     u8 *p = (u8 *)c;
     for (u32 i = 0; i < sizeof(*c); i++) p[i] = 0;
-    c->x = x << 8;
-    c->z = z << 8;
+    c->x = x * 256;
+    c->z = z * 256;
     c->y = world_height(x, z);
     if (c->y < 0) c->y = 0;
     c->heading = heading;
@@ -93,6 +98,7 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
 void car_respawn(Car *c)
 {
     car_reset(c, c->safe_x, c->safe_z, c->safe_heading);
+    if (g_track) race_on_respawn(c);
 }
 
 s32 car_speed(const Car *c)
@@ -167,7 +173,7 @@ static void take_off(Car *c)
 static void enter_loop(Car *c, s32 vlong)
 {
     c->mode = CAR_LOOP;
-    c->loop_s = c->z - (the_loop.z << 8);
+    c->loop_s = c->z - (the_loop.z * 256);
     c->loop_v = vlong;
     c->heading = 0;
     c->steer = 0;
@@ -179,6 +185,83 @@ static s32 at_loop(const Car *c, s32 z0, s32 nx, s32 nz, s32 vlong)
     const Loop *l = &the_loop;
     return !g_track && (z0 >> 8) < l->z && (nz >> 8) >= l->z && iabs((nx >> 8) - l->x) < l->width / 2 &&
            iabs((s16)c->heading) < LOOP_ALIGN && vlong > 256;
+}
+
+// Experimental classic car-response modes: a deliberately separate
+// yaw/tyre model so original Soft-Body and Arcade math cannot regress.
+// This is an original approximation, not Atari's TMS34010 physics program.
+// Input/output velocities are Q8 per simulation step; no new allocations.
+static s32 classic_ground_dynamics(Car *c, u16 keys, s32 *vlong, s32 *vlat,
+                                   s32 gravity_lat, s32 engine, s32 x, s32 z)
+{
+    const s32 hard = car_physics_profile == CAR_PHYS_HARD_STYLE;
+    s32 speed = iabs(*vlong);
+    if (speed > 4096) speed = 4096;
+
+    // A speed-dependent wheel angle, with distinctly heavy/light steering.
+    // The old arcade math and its wheel geometry remain unaffected.
+    s32 wheel_lock = (hard ? 50 : 68) -
+                     speed * (hard ? 38 : 44) / 4096;
+    wheel_lock = (wheel_lock * tn.steer) >> 8;
+    s32 desired = (keys & KEY_LEFT) ? -wheel_lock :
+                  (keys & KEY_RIGHT) ? wheel_lock : 0;
+    s32 rate = (tn.steer_rate * (hard ? 2 : 4)) / 3;
+    if (rate < 1) rate = 1;
+    if (c->steer < desired) {
+        c->steer += rate;
+        if (c->steer > desired) c->steer = desired;
+    } else if (c->steer > desired) {
+        c->steer -= rate;
+        if (c->steer < desired) c->steer = desired;
+    }
+
+    // Combined accelerating/braking and cornering cannot exceed tyre grip.
+    // HARD STYLE has weaker transient grip; RACE STYLE has a wider envelope.
+    s32 traction = car_grip * (hard ? 3 : 5) / 4;
+    traction -= iabs(engine) / 5;
+    if (c->boost) traction -= 4;
+    if (keys & KEY_L) traction = tn.hand_grip * (hard ? 2 : 3) / 3;
+    if (g_track && world_surface(x, z) == SURF_GRASS)
+        traction = (traction * 5) / 8;
+    if (!c->load) c->load = 256;
+    s32 effective_load = c->load;
+    if (tn.downforce) {
+        // Retain the physics lab's adjustable speed-sensitive downforce.
+        s32 v4 = speed >> 4;
+        effective_load += (v4 * v4 * tn.downforce) >> 16;
+        if (effective_load < 32) effective_load = 32;
+        if (effective_load > 1024) effective_load = 1024;
+    }
+    traction = (traction * effective_load) / 256;
+    if (traction < tn.grip_min) traction = tn.grip_min;
+
+    s32 slide = *vlat + gravity_lat;
+    c->skid = 0;
+    if (slide > traction) { slide -= traction; c->skid = 1; }
+    else if (slide < -traction) { slide += traction; c->skid = 1; }
+    else slide = 0;
+    *vlat = slide;
+    if (c->skid) *vlong -= *vlong / (hard ? 96 : 160);
+    if (keys & KEY_L) *vlong -= *vlong / 128;
+
+    // A bicycle-model requested turn plus rear-slip feedback. A sluggish
+    // body settles over six steps on HARD and three on RACE. Grip loss
+    // reduces nose authority; the handbrake lets the tail rotate more.
+    // Wheel lock is bounded and the speed cap avoids a slow 64-bit divide.
+    s32 yaw_speed = *vlong;
+    if (yaw_speed > 30000) yaw_speed = 30000;
+    if (yaw_speed < -30000) yaw_speed = -30000;
+    s32 wanted = (yaw_speed * c->steer) / 256;
+    if (hard) wanted = wanted * 3 / 4;
+    if (c->skid && !(keys & KEY_L)) wanted = wanted * 3 / 4;
+    if ((keys & KEY_L) && speed > 768) wanted = wanted * 5 / 4;
+    s32 slip_yaw = slide / (hard ? 7 : 5);
+    if (slip_yaw > 120) slip_yaw = 120;
+    if (slip_yaw < -120) slip_yaw = -120;
+    wanted += slip_yaw;
+    c->yaw_v += (wanted - c->yaw_v) / (hard ? 6 : 3);
+    c->heading += c->yaw_v;
+    return c->yaw_v;
 }
 
 static void ground_step(Car *c, u16 keys)
@@ -216,6 +299,11 @@ static void ground_step(Car *c, u16 keys)
         along -= vlong >> 6;                // grass off the circuit slows you right down
     vlong += along;
 
+    s32 yaw;
+    if (car_physics_profile == CAR_PHYS_HARD_STYLE ||
+        car_physics_profile == CAR_PHYS_RACE_STYLE) {
+        yaw = classic_ground_dynamics(c, keys, &vlong, &vlat, alat, engine, ux, uz);
+    } else {
     // Tyres cancel sideways motion up to their grip; beyond that the car slides.
     // Grip shrinks when the tyres are also braking or driving hard (so trail
     // braking or flooring it mid-corner can break traction), on grass, and when
@@ -250,7 +338,7 @@ static void ground_step(Car *c, u16 keys)
     s32 target = (keys & KEY_LEFT) ? -lock : (keys & KEY_RIGHT) ? lock : 0, rate = tn.steer_rate;
     if (c->steer < target)      c->steer = c->steer + rate > target ? target : c->steer + rate;
     else if (c->steer > target) c->steer = c->steer - rate < target ? target : c->steer - rate;
-    s32 yaw = (vlong * c->steer) >> 8;
+    yaw = (vlong * c->steer) >> 8;
     if (c->skid && !hand) yaw = (yaw * 3) >> 2;     // front tyres sliding: understeer
     if (hand && sp > 768)  yaw = (yaw * 3) >> 1;     // handbrake: the tail steps out
     // Weight transfer: braking loads the nose so it bites and the tail goes
@@ -264,14 +352,16 @@ static void ground_step(Car *c, u16 keys)
     yaw += align > 200 ? 200 : align < -200 ? -200 : align;
     c->heading += yaw;
 
+    }
+
     c->vx = (vlong * fx + vlat * fz) >> 14;
     c->vz = (vlong * fz - vlat * fx) >> 14;
 
     // Body pitch and roll: the slope underneath plus squat, dive and lean.
     s32 sf = (gx * fx + gz * fz) >> 14, sr = (gx * fz - gz * fx) >> 14;
     s32 a_lat = (vlong * yaw) / 10430;
-    spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) << 8) + engine * 48);
-    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * tn.lean);
+    spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) * 256) + engine * 48);
+    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) * 256) - a_lat * tn.lean);
 
     // Move, then resolve walls.
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
@@ -417,14 +507,14 @@ move:;
     s32 h = c->heading >> 6;
     s32 fx = isin(h), fz = icos(h);
     s32 fwd = (c->vx * fx + c->vz * fz) >> 14;
-    s32 path = iatan2(c->vy, fwd < 64 ? 64 : fwd) << 8;
+    s32 path = iatan2(c->vy, fwd < 64 ? 64 : fwd) * 256;
     if (!tricking && !cheat_fly) {
         c->pitch += wrap_angle(path - c->pitch) / 16;
         c->roll -= wrap_angle(c->roll) / 16;
     }
 
     s32 ux = nx >> 8, uz = nz >> 8;
-    if (c->y < (-16 << 8) && world_in_water(ux, uz)) {
+    if (c->y < (-(16 << 8)) && world_in_water(ux, uz)) {
         crash(c, EV_SPLASH);
         return;
     }
@@ -449,17 +539,38 @@ move:;
     }
     c->y = hg;
     c->landed = impact;
-    c->vx -= (c->vx * impact) >> 13;
-    c->vz -= (c->vz * impact) >> 13;
     c->bob_v -= impact / 2;
     c->pitch_v -= impact / 2;
-    if (impact > 700) {
-        c->vy = surf_vy + impact / 4;   // bounce
-        c->y = hg + 256;
-        return;
+    if (car_motion_profile == CAR_MOTION_NEWTON) {
+        // Touchdown impulse along the surface normal (-gx,256,-gz), not
+        // a scripted horizontal slowdown. Elasticity is 0.25 on hard
+        // landings. It runs only on touchdown, not every physics frame.
+        if (impact > 0) {
+            s32 norm2 = gx * gx + 256 * 256 + gz * gz;
+            s32 restitution = impact > 700 ? 64 : 0;
+            s32 dy = (s32)(((long long)impact * (256 + restitution) * 256) / norm2);
+            c->vx -= (s32)(((long long)dy * gx) / 256);
+            c->vz -= (s32)(((long long)dy * gz) / 256);
+            c->vy += dy;
+        }
+        if (impact > 700) {
+            c->y += 256;
+            return;
+        }
+        c->vy = (c->vx * gx + c->vz * gz) / 256;
+        c->mode = CAR_GROUND;
+    } else {
+        // Original landing behavior remains unchanged when selected.
+        c->vx -= (c->vx * impact) >> 13;
+        c->vz -= (c->vz * impact) >> 13;
+        if (impact > 700) {
+            c->vy = surf_vy + impact / 4;
+            c->y = hg + 256;
+            return;
+        }
+        c->vy = surf_vy;
+        c->mode = CAR_GROUND;
     }
-    c->vy = surf_vy;
-    c->mode = CAR_GROUND;
     c->event_c = (iabs(c->trick_p) + 65536) >> 18;    // whole turns, 3/4 counts
     c->event_d = (iabs(c->trick_r) + 65536) >> 18;
     c->event_e = (iabs(c->trick_h) + 16384) >> 16;
@@ -490,11 +601,20 @@ static void loop_step(Car *c, u16 keys)
     if (c->loop_s >= len) {                  // made it round
         s32 over = c->loop_s - len;
         c->mode = CAR_GROUND;
-        c->x = (l->x + l->shift) << 8;
-        c->z = (l->z << 8) + over;
+        c->x = (l->x + l->shift) * 256;
+        c->z = (l->z * 256) + over;
         c->y = 0;
         c->vx = 0; c->vy = 0; c->vz = v;
         c->heading = 0;
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // This loop advances sideways by shift over its circumference.
+            // The exit tangent therefore has an X component; preserve it
+            // instead of teleporting the velocity back to straight ahead.
+            // Also integrate the short part of the tick past the loop end.
+            c->vx = (v * l->shift * 256) / len;
+            c->x += (over * l->shift * 256) / len;
+            c->heading = iatan2(l->shift, len / 256) * 64;
+        }
         c->pitch = 0;
         c->event = EV_LOOP;
         c->event_a = (car_speed(c) * 67) / 2560;   // mph at the exit
@@ -502,11 +622,18 @@ static void loop_step(Car *c, u16 keys)
     }
     if (c->loop_s < 0) {                     // rolled back out of the entry
         c->mode = CAR_GROUND;
-        c->x = l->x << 8;
-        c->z = (l->z << 8) + c->loop_s;
+        c->x = l->x * 256;
+        c->z = (l->z * 256) + c->loop_s;
         c->y = 0;
         c->vx = 0; c->vy = 0; c->vz = v;
         c->heading = 0;
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // Rolling back out of the loop keeps the same tangent, but a
+            // negative velocity. Original motion remains bit-identical.
+            c->vx = (v * l->shift * 256) / len;
+            c->x += (c->loop_s * l->shift * 256) / len;
+            c->heading = iatan2(l->shift, len / 256) * 64;
+        }
         c->pitch = 0;
         return;
     }
@@ -517,15 +644,23 @@ static void loop_step(Car *c, u16 keys)
     c->vx = (v * l->shift * 256) / len;
     c->vz = (v * icos(theta)) >> 14;
     c->vy = (v * isin(theta)) >> 14;
-    c->pitch = theta << 8;
+    c->pitch = theta * 256;
     c->roll = 0;
     c->bob = 0;
 
-    // The track can only push, not pull: too slow near the top and you fall.
-    s32 normal = (v * v) / (l->radius << 8) + ((G * icos(theta)) >> 14);
+    // Newton's radial support condition: N/m = v^2/R + g*cos(theta).
+    // A negative value would require the track to pull the car inward.
+    s32 bounded = v > 12000 ? 12000 : v < -12000 ? -12000 : v;
+    s32 normal = (bounded * bounded) / (l->radius * 256) + ((G * icos(theta)) >> 14);
     if (normal < 0) {
-        crash(c, EV_FELL);
-        c->vy -= 400;   // undo the upward throw: the car drops off
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // Ballistic flight at the exact contact point, carrying the
+            // loop tangent velocity with no artificial downward impulse.
+            take_off(c);
+        } else {
+            crash(c, EV_FELL);
+            c->vy -= 400; // unchanged original arcade fall
+        }
     }
 }
 
@@ -533,12 +668,12 @@ static void crash_step(Car *c)
 {
     c->timer++;
     s32 ux = c->x >> 8, uz = c->z >> 8;
-    if (c->y < (-16 << 8) && world_in_water(ux, uz)) {
+    if (c->y < (-(16 << 8)) && world_in_water(ux, uz)) {
         // Sinking.
         c->vx -= c->vx >> 3;
         c->vz -= c->vz >> 3;
         c->vy = -48;
-        if (c->y < (-70 << 8)) { c->y = -70 << 8; c->vy = 0; }
+        if (c->y < (-(70 << 8))) { c->y = -(70 << 8); c->vy = 0; }
         c->spin_p -= c->spin_p >> 4;
         c->spin_r -= c->spin_r >> 4;
     } else {
@@ -548,12 +683,12 @@ static void crash_step(Car *c)
     collide(c, &nx, &nz, 0);
     c->x = nx; c->z = nz;
     c->y += c->vy;
-    c->pitch += c->spin_p << 8;
-    c->roll += c->spin_r << 8;
+    c->pitch += c->spin_p * 256;
+    c->roll += c->spin_r * 256;
     c->heading += c->spin_h;
 
     s32 hg = world_height(nx >> 8, nz >> 8);
-    if (hg > (-100 << 8) && c->y <= hg) {
+    if (hg > (-(100 << 8)) && c->y <= hg) {
         // Tumble along the ground, losing energy each bounce.
         c->y = hg;
         c->vy = -c->vy / 3;
@@ -643,7 +778,7 @@ void car_step(Car *c, u16 keys)
     c->bob_v -= (c->bob_v * tn.damp) >> 10;
     c->bob += c->bob_v;
     if (c->bob > (8 << 8)) c->bob = 8 << 8;
-    if (c->bob < (-8 << 8)) c->bob = -8 << 8;
+    if (c->bob < (-(8 << 8))) c->bob = -(8 << 8);
     gearbox(c, keys);
 }
 
@@ -768,7 +903,7 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
 EWRAM_BSS static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
 static const u8 rival_mats[RIVAL_COLORS] = { M_STUNT_WHITE, M_BLD2, M_LINE, M_BLD5, M_BLD4, M_GLASS, M_BLD0 };
 
-void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth)
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 roll, s32 color, s32 depth)
 {
     color %= RIVAL_COLORS;
     u8 *g = rival_faces[color];
@@ -784,7 +919,7 @@ void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 
         g = rival_faces[color];
     }
     s32 m[9];
-    car_matrix(heading >> 6, pitch, 0, m);
+    car_matrix(heading >> 6, pitch, roll, m);
     if (depth < 320) {
         if (depth < 200) {
             wheel(x, y, z, m, -17, -30);

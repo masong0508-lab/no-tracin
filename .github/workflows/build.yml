@@ -1,0 +1,44 @@
+name: Build and source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gba:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+      - name: Source regression checks
+        run: make test
+      - name: Build standard GBA game
+        run: make -j2
+      - name: Verify generated custom course data
+        run: git diff --exit-code -- src/tracks_data.h src/tracks_dims.h
+
+      - name: Upload standard GBA ROM (no donor assets)
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-standard-gba
+          path: notracin.gba
+          if-no-files-found: error
+          retention-days: 30
+      - name: Package source and ARM runtime for private local rebuilds
+        run: |
+          mkdir -p build/repro
+          tar -czf build/repro/source.tar.gz Makefile gba.ld src tools tests README.md docs
+          cp "$(arm-none-eabi-gcc -mcpu=arm7tdmi -mthumb -print-libgcc-file-name)" build/repro/libgcc.a
+      - name: Upload source and ARM runtime (no donor assets)
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-repro-source
+          path: build/repro/
+          if-no-files-found: error
+          retention-days: 7

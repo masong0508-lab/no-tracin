@@ -5,21 +5,50 @@
 #include "world.h"
 
 #include "tracks_data.h"
+#ifdef WITH_VRD_32X_TRACKS
+#include "vrd32x_study.h"
+#include "vrd32x_study_tracks.h" // generated only for private 32X build
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+#include "vr_original.h"
+// Generated from the user's source ROM; absent from normal builds.
+#include "vr_original_tracks.h"
+const u32 g_vr_original_pack_version = VR_ORIGINAL_PACK_VERSION;
+#endif
 
 // Laps and the race clock come from the course definitions in mktracks.py.
 const TrackDef g_tracks[TRACK_COUNT] = {
     { "BIG FOREST", "BEGINNER", bf_pts, BF_POINTS, BF_LAP, bf_cell_first, bf_cell_count, bf_cell_list,
       bf_props, bf_prop_first, bf_prop_count, BF_PROPS, bf_marks, BF_MARKS, bf_water, BF_WATER,
-      BF_LAPS, BF_START_TIME, BF_CP_TIME, SCENE_FOREST },
+      BF_LAPS, BF_START_TIME, BF_CP_TIME, SCENE_FOREST, 0 },
     { "BAY BRIDGE", "MEDIUM", bb_pts, BB_POINTS, BB_LAP, bb_cell_first, bb_cell_count, bb_cell_list,
       bb_props, bb_prop_first, bb_prop_count, BB_PROPS, bb_marks, BB_MARKS, bb_water, BB_WATER,
-      BB_LAPS, BB_START_TIME, BB_CP_TIME, SCENE_BAY },
+      BB_LAPS, BB_START_TIME, BB_CP_TIME, SCENE_BAY, 0 },
     { "ACROPOLIS", "EXPERT", ac_pts, AC_POINTS, AC_LAP, ac_cell_first, ac_cell_count, ac_cell_list,
       ac_props, ac_prop_first, ac_prop_count, AC_PROPS, ac_marks, AC_MARKS, ac_water, AC_WATER,
-      AC_LAPS, AC_START_TIME, AC_CP_TIME, SCENE_MOUNTAINS },
+      AC_LAPS, AC_START_TIME, AC_CP_TIME, SCENE_MOUNTAINS, 0 },
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    VR_ORIGINAL_TRACK_DEFS
+#endif
+#ifdef WITH_VRD_32X_TRACKS
+    VRD32X_STUDY_TRACK_DEFS
+#endif
 };
 
 const TrackDef *g_track;
+
+const char *track_set_name(s32 set)
+{
+#ifdef WITH_VRD_32X_TRACKS
+    if (set == TRACK_SET_VRD) return "32X ROAD STUDIES";
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (set == TRACK_SET_ORIGINAL) return "VR ORIGINALS";
+#else
+    (void)set;
+#endif
+    return "CUSTOM COURSES";
+}
 
 #define MAX_POINTS 256
 #define RAIL_H     16
@@ -57,9 +86,29 @@ static const u16 prop_reach[P_COUNT] = {
 
 static inline s32 iabs(s32 v) { return v < 0 ? -v : v; }
 
-static inline s32 barrier(const TrackPt *p) { return TRACK_HALF_W + p->verge; }
+#ifdef WITH_VR_ORIGINAL_TRACKS
+static inline s32 original_course(void)
+{
+    if (!g_track) return -1;
+    s32 index = g_track - g_tracks - TRACKS_PER_SET;
+    return index >= 0 && index < TRACKS_PER_SET ? index : -1;
+}
+#endif
 
-s32 track_find(s32 x, s32 z, TrackHit *hit)
+s32 track_half_width(s32 seg)
+{
+    return g_track && g_track->half_widths && seg >= 0 && seg < g_track->count
+        ? g_track->half_widths[seg] : TRACK_HALF_W;
+}
+
+static inline s32 barrier(const TrackPt *p)
+{
+    return track_half_width(p - g_track->pts) + p->verge;
+}
+
+// Race progress, traffic and surfaces need the nearest road, not height.
+// Avoid the original-course height-plane division on those hot paths.
+s32 track_find_road(s32 x, s32 z, TrackHit *hit)
 {
     const TrackDef *t = g_track;
     if (x < 0 || z < 0 || x >= TRACK_WORLD || z >= TRACK_WORLD) return 0;
@@ -78,18 +127,48 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
         s32 d = cx * cx + cz * cz;
         if (d < best) { best = d; bi = list[k]; bt = a; bcx = cx; bcz = cz; }
     }
-    const TrackPt *p = &t->pts[bi], *q = &t->pts[bi + 1 == t->count ? 0 : bi + 1];
+    const TrackPt *p = &t->pts[bi];
     hit->seg = bi;
     hit->along = bt;
     hit->dist = isqrt(best);
     hit->lat = (bcx * p->uz - bcz * p->ux) >= 0 ? hit->dist : -hit->dist;
-    hit->h = (p->y << 8) + (((q->y - p->y) << 8) * bt) / (p->len ? p->len : 1);
-    (void)bcz;
+    hit->h = 0; // Unused by this projection-only API.
+    return 1;
+}
+
+s32 track_find(s32 x, s32 z, TrackHit *hit)
+{
+    if (!track_find_road(x, z, hit)) return 0;
+    const TrackDef *t = g_track;
+    const TrackPt *p = &t->pts[hit->seg];
+    const TrackPt *q = &t->pts[hit->seg + 1 == t->count ? 0 : hit->seg + 1];
+    // Preserve signed truncation without shifting a negative elevation.
+    hit->h = p->y * 256 + (s32)((((long long)q->y - p->y) * 256 * hit->along)
+                                / (p->len ? p->len : 1));
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if (study >= 0) {
+        hit->h = vrd32x_study_height(study,x,z);
+        return 1;
+    }
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) hit->h = vr_original_height(original, x, z);
+#endif
     return 1;
 }
 
 s32 track_height(s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_height(study,x,z);
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) return vr_original_height(original, x, z);
+#endif
     TrackHit h;
     if (!track_find(x, z, &h)) return 0;
     const TrackPt *p = &g_track->pts[h.seg];
@@ -102,24 +181,47 @@ s32 track_height(s32 x, s32 z)
 
 void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) {
+        s32 h=0;
+        vrd32x_study_ground_plane(study,x,z,8,&h,gx,gz);
+        return;
+    }
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) {
+        vr_original_gradient(original, x, z, gx, gz);
+        return;
+    }
+#endif
     TrackHit h;
     *gx = *gz = 0;
-    if (!track_find(x, z, &h)) return;
+    if (!track_find_road(x, z, &h)) return;
     const TrackPt *p = &g_track->pts[h.seg], *q = &g_track->pts[h.seg + 1 == g_track->count ? 0 : h.seg + 1];
     if (h.dist > barrier(p)) return;
-    s32 g = ((q->y - p->y) << 8) / (p->len ? p->len : 1);   // rise per unit, Q8
+    s32 g = ((q->y - p->y) * 256) / (p->len ? p->len : 1);   // rise per unit, Q8
     *gx = (g * p->ux) >> 14;
     *gz = (g * p->uz) >> 14;
 }
 
 s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_ground_plane(study,x,z,r,h0,gx,gz);
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) return vr_original_ground_plane(original, x, z, r, h0, gx, gz);
+#endif
     TrackHit h;
     *h0 = 0; *gx = 0; *gz = 0;
     if (!track_find(x, z, &h)) return 0;
     const TrackPt *p = &g_track->pts[h.seg], *q = &g_track->pts[h.seg + 1 == g_track->count ? 0 : h.seg + 1];
     if (h.dist + r > barrier(p)) return 0;
-    s32 g = ((q->y - p->y) << 8) / (p->len ? p->len : 1);
+    s32 g = ((q->y - p->y) * 256) / (p->len ? p->len : 1);
     *h0 = h.h;
     *gx = (g * p->ux) >> 14;
     *gz = (g * p->uz) >> 14;
@@ -130,6 +232,14 @@ s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
 // its neighbours are tried, which is much cheaper than a full search.
 s32 track_height_near(s32 seg, s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_height(study,x,z);
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) return vr_original_height(original, x, z);
+#endif
     const TrackDef *t = g_track;
     s32 best = 0x7FFFFFFF, bi = seg, ba = 0;
     for (s32 k = -1; k <= 1; k++) {
@@ -148,21 +258,37 @@ s32 track_height_near(s32 seg, s32 x, s32 z)
     const TrackPt *p = &t->pts[bi], *q = &t->pts[bi + 1 == t->count ? 0 : bi + 1];
     s32 edge = barrier(p);
     if (best > edge * edge) return track_height(x, z);
-    return (p->y << 8) + (((q->y - p->y) * ba * inv_len[bi]) >> 8);
+    return (p->y * 256) + (((q->y - p->y) * ba * inv_len[bi]) >> 8);
 }
 
 s32 track_surface(s32 x, s32 z)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) return vrd32x_study_surface(study,x,z);
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) return vr_original_surface(original, x, z);
+#endif
     TrackHit h;
-    if (!track_find(x, z, &h)) return SURF_GRASS;
-    return h.dist < TRACK_HALF_W ? SURF_ROAD : SURF_GRASS;
+    if (!track_find_road(x, z, &h)) return SURF_GRASS;
+    return h.dist < track_half_width(h.seg) ? SURF_ROAD : SURF_GRASS;
 }
 
 s32 track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    // Exploratory drive does not invent walls at as-yet-unverified boundaries.
+    if(vrd32x_study_slot()>=0){*nx=*nz=0;return 0;}
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) return vr_original_collide(original, x, z, radius, nx, nz);
+#endif
     TrackHit h;
     *nx = 0; *nz = 0;
-    if (!track_find(x, z, &h)) return 0;
+    if (!track_find_road(x, z, &h)) return 0;
     const TrackPt *p = &g_track->pts[h.seg];
     s32 edge = barrier(p) - 4;
     s32 pen = h.dist + radius - edge;
@@ -170,8 +296,8 @@ s32 track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
     // Push back toward the centreline.
     s32 cx = x - (p->x + ((p->ux * h.along) >> 14));
     s32 cz = z - (p->z + ((p->uz * h.along) >> 14));
-    *nx = -(cx << 14) / h.dist;
-    *nz = -(cz << 14) / h.dist;
+    *nx = -(cx * 16384) / h.dist;
+    *nz = -(cz * 16384) / h.dist;
     return pen;
 }
 
@@ -199,14 +325,22 @@ void track_point(s32 d, s32 lat, s32 *x, s32 *z, s32 *y, s32 *heading, s32 *hint
     s32 rz = nrz[i] + (((nrz[ni] - nrz[i]) * f) >> 16);
     *x = p->x + ((p->ux * a) >> 14) + ((rx * lat) >> 14);
     *z = p->z + ((p->uz * a) >> 14) + ((rz * lat) >> 14);
-    *y = (p->y << 8) + (((q->y - p->y) * f) >> 8);
+    *y = (p->y * 256) + (((q->y - p->y) * f) >> 8);
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if(study>=0) *y = vrd32x_study_height(study,*x,*z);
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) *y = vr_original_height(original, *x, *z);
+#endif
     s32 dh = (s16)(q->heading - p->heading);
     *heading = (u16)(p->heading + ((dh * (f >> 4)) >> 12));
 }
 
 void track_load(s32 index)
 {
-    if (index < 0) {
+    if (index < 0 || index >= TRACK_COUNT) {
         g_track = 0;
         r_set_scene(SCENE_CITY);
         return;
@@ -218,8 +352,8 @@ void track_load(s32 index)
         s32 x = a->uz + b->uz, z = -a->ux - b->ux;
         s32 l = isqrt(x * x + z * z);
         if (!l) { x = b->uz; z = -b->ux; l = 16384; }
-        nrx[i] = (x << 14) / l;
-        nrz[i] = (z << 14) / l;
+        nrx[i] = (x * 16384) / l;
+        nrz[i] = (z * 16384) / l;
         tower_at[i] = 0;
         inv_len[i] = 65535 / (b->len ? b->len : 1);
         const TrackPt *c = &t->pts[i + 1 == t->count ? 0 : i + 1];
@@ -822,6 +956,17 @@ static void draw_segment_faces(s32 a, s32 depth)
 void track_draw(s32 focus_x, s32 focus_z, s32 frame)
 {
     const TrackDef *t = g_track;
+#ifdef WITH_VRD_32X_TRACKS
+    s32 study = vrd32x_study_slot();
+    if (study>=0) { vrd32x_study_draw(study,focus_x,focus_z,frame); return; }
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original = original_course();
+    if (original >= 0) {
+        vr_original_draw(original, focus_x, focus_z, frame);
+        return;
+    }
+#endif
     const TrackPt *pts = t->pts;
 
     // Water first: it lies under everything. Only the tiles in reach of the
@@ -918,7 +1063,14 @@ static void map_pixel(volatile u16 *page, s32 x, s32 y, u8 c)
 
 void track_map(volatile u16 *page, s32 index, s32 x0, s32 y0, s32 w, s32 h, u8 color, s32 dot_d, u8 dot_color)
 {
+    if (index < 0 || index >= TRACK_COUNT) return;
     const TrackDef *t = &g_tracks[index];
+#ifdef WITH_VRD_32X_TRACKS
+    if(index>=TRACK_VRD_FIRST){
+        vrd32x_study_map(page,index-TRACK_VRD_FIRST,x0,y0,w,h,color);
+        return;
+    }
+#endif
     s32 minx = 99999, maxx = -1, minz = 99999, maxz = -1;
     for (s32 i = 0; i < t->count; i++) {
         const TrackPt *p = &t->pts[i];

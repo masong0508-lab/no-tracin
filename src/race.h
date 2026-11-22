@@ -31,6 +31,7 @@ typedef struct {
 extern Race g_race;
 
 void race_begin(s32 track, s32 mode, Car *player);
+void race_on_respawn(Car *player);          // restore earned safe-point progress
 void race_step(Car *player, s32 started);     // once per physics step
 void race_draw_rivals(void);
 void race_hud(const Car *car, s32 frame);

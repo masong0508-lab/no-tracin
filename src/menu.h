@@ -8,7 +8,7 @@
 enum {
     OPT_GRAVITY, OPT_ENGINE, OPT_TYRES, OPT_CRASHES, OPT_SPEED, OPT_SLOWMO,
     OPT_TIME, OPT_PAINT, OPT_SHAKE, OPT_UNITS, OPT_GHOST, OPT_HUD, OPT_SOUND,
-    OPT_AUTOSAVE, OPT_PHYSICS, OPT_COUNT
+    OPT_AUTOSAVE, OPT_PHYSICS, OPT_MOTION, OPT_COUNT
 };
 enum { PAINT_RAINBOW = 7 };
 extern u8 g_opt[OPT_COUNT];
@@ -41,6 +41,7 @@ s32  load_slot(s32 slot, Car *c, s32 *score);
 void save_erase(void);
 // A small checksummed block in the save, outside the areas above.
 #define RACE_SAVE_AT 0x7C00
+#define ORIGINAL_RACE_SAVE_AT 0x7C40  // independent of the three custom-course records
 void save_blob(u32 magic, u32 at, const void *p, u32 n);
 s32  load_blob(u32 magic, u32 at, void *p, u32 n);
 

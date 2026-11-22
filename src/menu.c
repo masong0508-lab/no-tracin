@@ -30,11 +30,12 @@ static const OptDef defs[OPT_COUNT] = {
     [OPT_HUD]      = { "HUD",          2, { "FULL", "CLEAN" } },
     [OPT_SOUND]    = { "SOUND",        3, { "ON", "NO ENGINE", "OFF" } },
     [OPT_AUTOSAVE] = { "AUTOSAVE",     2, { "ON", "OFF" } },
-    [OPT_PHYSICS]  = { "PHYSICS",      2, { "SOFT-BODY", "ARCADE" } },
+    [OPT_PHYSICS]  = { "HANDLING",     4, { "SOFT-BODY", "ARCADE", "HARD STYLE", "RACE STYLE" } },
+    [OPT_MOTION]   = { "MOTION PHYS",  2, { "ORIGINAL", "NEWTON" } },
 };
 // The order the options menu lists them in.
 static const u8 opt_order[OPT_COUNT] = {
-    OPT_PHYSICS, OPT_GRAVITY, OPT_ENGINE, OPT_TYRES, OPT_CRASHES, OPT_SPEED, OPT_SLOWMO,
+    OPT_PHYSICS, OPT_MOTION, OPT_GRAVITY, OPT_ENGINE, OPT_TYRES, OPT_CRASHES, OPT_SPEED, OPT_SLOWMO,
     OPT_TIME, OPT_PAINT, OPT_SHAKE, OPT_UNITS, OPT_GHOST, OPT_HUD, OPT_SOUND, OPT_AUTOSAVE,
 };
 
@@ -68,7 +69,12 @@ void options_apply(void)
     car_power = power[g_opt[OPT_ENGINE]];
     car_grip = grip[g_opt[OPT_TYRES]];
     car_crashes = g_opt[OPT_CRASHES] == 0;
-    car_softbody = g_opt[OPT_PHYSICS] == 0;
+    // Existing option slot 14 is preserved in SRAM; only its allowed values
+    // expand. Original physics remain exactly as before for values 0 and 1.
+    car_physics_profile = g_opt[OPT_PHYSICS];
+    car_softbody = car_physics_profile == CAR_PHYS_SOFT_BODY;
+    // Reuse opt[15], formerly reserved in the existing 16-byte NTR2 save.
+    car_motion_profile = g_opt[OPT_MOTION];
     tune_apply();                      // the physics lab's sliders on top of the presets
     g_units_kmh = g_opt[OPT_UNITS];
     r_init_palette(g_opt[OPT_TIME], paint_color(0));
@@ -235,6 +241,10 @@ void menu_options(void)
 {
     // Row 0 opens the physics lab, then the options, then DONE.
     s32 sel = 0, n = OPT_COUNT + 2, frame = 0, first = 1;
+    // 13 clearly legible lines fit the 240x160 options panel; scrolling
+    // preserves access to Autosave and DONE without clipping.
+    const s32 visible = 13;
+    s32 top = 0;
     flush_keys();
     for (;;) {
         u16 k = menu_keys();
@@ -261,9 +271,11 @@ void menu_options(void)
         frame++;
         if (idle(k, &first)) continue;
 
-        frame_begin("OPTIONS", n - 3);
-        s32 y = menu_top(n - 3) - 4;
-        for (s32 i = 0; i < n; i++, y += 8) {
+        if (sel < top) top = sel;
+        if (sel >= top + visible) top = sel - visible + 1;
+        frame_begin("OPTIONS", 10);
+        s32 y = menu_top(10) - 4;
+        for (s32 i = top; i < n && i < top + visible; i++, y += 8) {
             if (i == sel) rect(20, y - 1, 220, y + 7, C_HILITE);
             if (i == n - 1) { text_c(y, "DONE", i == sel ? C_YELLOW : C_WHITE, 1); break; }
             if (i == 0) {
@@ -280,6 +292,8 @@ void menu_options(void)
                 text_r(208, y, v, C_CYAN);
             } else text_r(208, y, v, C_GREY);
         }
+        if (top > 0) text_r(211, 26, "^", C_CYAN);
+        if (top + visible < n) text_r(211, 140, "v", C_CYAN);
         frame_end();
     }
 }

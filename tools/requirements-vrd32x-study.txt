@@ -1,0 +1,5 @@
+# Only for optional, locally generated 32X road-study pack; no network in game.
+numpy>=1.24
+scipy>=1.10
+scikit-image>=0.21
+networkx>=3.0

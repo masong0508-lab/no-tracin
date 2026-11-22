@@ -146,6 +146,20 @@ static s32 attached(s32 i)
     return hub_on[i - HUB0];
 }
 
+void sb_add_velocity(Car *c, s32 vx, s32 vz)
+{
+    if (!c || owner != c) return;
+    c->vx += vx;
+    c->vz += vz;
+    // Verlet velocity lives in the previous positions. A shared addition
+    // preserves the current shape and angular motion, including dents.
+    for (s32 i = 0; i < NN; i++) {
+        if (!attached(i)) continue;
+        nd[i].px -= vx;
+        nd[i].pz -= vz;
+    }
+}
+
 static void beam_set(Beam *b, s32 r)
 {
     b->r = r;
@@ -172,7 +186,7 @@ static void normalize(s32 *v)
     u32 l2 = (u32)(v[0] * v[0]) + (u32)(v[1] * v[1]) + (u32)(v[2] * v[2]);
     s32 l = isqrt(l2);
     if (!l) { v[0] = 0; v[1] = 0; v[2] = 16384; return; }
-    for (s32 k = 0; k < 3; k++) v[k] = (v[k] << 14) / l;
+    for (s32 k = 0; k < 3; k++) v[k] = (v[k] * 16384) / l;
 }
 
 static inline s32 dot14(const s32 *a, const s32 *b)
@@ -236,7 +250,8 @@ static void impulse(const s32 *j, const s32 *p)
     s32 w0 = RS(dot14(t, ax_r) * inv_i[0], 8);
     s32 w1 = RS(dot14(t, ax_u) * inv_i[1], 8);
     s32 w2 = RS(dot14(t, ax_f) * inv_i[2], 8);
-    for (s32 k = 0; k < 3; k++) accw[k] += RS(ax_r[k] * w0 + ax_u[k] * w1 + ax_f[k] * w2, 14);
+    for (s32 k = 0; k < 3; k++)
+        accw[k] += RS((long long)ax_r[k] * w0 + (long long)ax_u[k] * w1 + (long long)ax_f[k] * w2, 14);
 }
 
 // Velocity change the gathered impulses give point p (units from cen).
@@ -279,10 +294,49 @@ static void apply_rigid(void)
 
 // ---------------------------------------------------------------- building
 
+#ifdef WITH_VR_ORIGINAL_TRACKS
+// A fresh car on an imported bank must start with its frame parallel to the
+// road. A horizontal frame puts the uphill wheels inside the road and the
+// first suspension correction can overturn it. This only sets a grounded
+// spawn/teleport pose; ordinary simulation continues to choose its own axes.
+static s32 original_spawn_axes(const Car *c, s32 *right, s32 *up, s32 *forward)
+{
+    if (!g_track || g_track < g_tracks + TRACKS_PER_SET || c->mode != CAR_GROUND) return 0;
+    s32 gx, gz;
+    track_gradient(c->x >> 8, c->z >> 8, &gx, &gz);
+    // Discontinuous terrain at a wall is not a road plane to stand on.
+    if ((!gx && !gz) || gx < -512 || gx > 512 || gz < -512 || gz > 512) return 0;
+    s32 s = isin(c->heading >> 6), co = icos(c->heading >> 6);
+    up[0] = -gx; up[1] = 256; up[2] = -gz;
+    normalize(up);
+    // Preserve the intended horizontal heading while following the grade.
+    forward[0] = s >> 6;
+    forward[1] = (gx * s + gz * co) >> 14;
+    forward[2] = co >> 6;
+    normalize(forward);
+    right[0] = (up[1] * forward[2] - up[2] * forward[1]) >> 14;
+    right[1] = (up[2] * forward[0] - up[0] * forward[2]) >> 14;
+    right[2] = (up[0] * forward[1] - up[1] * forward[0]) >> 14;
+    normalize(right);
+    forward[0] = (right[1] * up[2] - right[2] * up[1]) >> 14;
+    forward[1] = (right[2] * up[0] - right[0] * up[2]) >> 14;
+    forward[2] = (right[0] * up[1] - right[1] * up[0]) >> 14;
+    normalize(forward);
+    return 1;
+}
+
+static void spawn_angles(Car *c)
+{
+    s32 horizontal = isqrt((u32)(ax_f[0] * ax_f[0]) + (u32)(ax_f[2] * ax_f[2]));
+    c->pitch = iatan2(ax_f[1], horizontal) * 256;
+    c->roll = iatan2(-ax_r[1], ax_u[1]) * 256;
+}
+#endif
+
 void sb_reset(Car *c)
 {
     // The frame's axes at rest, measured in car axes.
-    for (s32 i = 0; i < NF; i++) { nd[i].x = rest[i][0] << 8; nd[i].y = rest[i][1] << 8; nd[i].z = rest[i][2] << 8; }
+    for (s32 i = 0; i < NF; i++) { nd[i].x = rest[i][0] * 256; nd[i].y = rest[i][1] * 256; nd[i].z = rest[i][2] * 256; }
     for (s32 j = 0; j < 3; j++)
         for (s32 k = 0; k < 3; k++) corr[j][k] = j == k ? 16384 : 0;
     frame();
@@ -293,12 +347,24 @@ void sb_reset(Car *c)
     ax_f[0] = s;  ax_f[1] = 0;     ax_f[2] = co;
     ax_r[0] = co; ax_r[1] = 0;     ax_r[2] = -s;
     ax_u[0] = 0;  ax_u[1] = 16384; ax_u[2] = 0;
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 aligned = original_spawn_axes(c, ax_r, ax_u, ax_f);
+#endif
     for (s32 i = 0; i < NN; i++) {
-        s32 lx = rest[i][0] << 8, ly = rest[i][1] << 8, lz = rest[i][2] << 8;
+        s32 lx = rest[i][0] * 256, ly = rest[i][1] * 256, lz = rest[i][2] * 256;
         Node *n = &nd[i];
+#ifdef WITH_VR_ORIGINAL_TRACKS
+        if (aligned) {
+            n->x = c->x + ((ax_r[0] * lx + ax_u[0] * ly + ax_f[0] * lz) >> 14);
+            n->y = c->y + ((ax_r[1] * lx + ax_u[1] * ly + ax_f[1] * lz) >> 14);
+            n->z = c->z + ((ax_r[2] * lx + ax_u[2] * ly + ax_f[2] * lz) >> 14);
+        } else
+#endif
+        {
         n->x = c->x + ((ax_r[0] * lx + ax_f[0] * lz) >> 14);
         n->y = c->y + ly;
         n->z = c->z + ((ax_r[2] * lx + ax_f[2] * lz) >> 14);
+        }
         n->px = n->x - c->vx;
         n->py = n->y - c->vy;
         n->pz = n->z - c->vz;
@@ -316,10 +382,10 @@ void sb_reset(Car *c)
     s32 *cl = cl_rest;
     cl[0] = cl[1] = cl[2] = 0;
     for (s32 i = 0; i < NF; i++)
-        for (s32 k = 0; k < 3; k++) cl[k] += rest[i][k] << 8;
+        for (s32 k = 0; k < 3; k++) cl[k] += rest[i][k] * 256;
     for (s32 k = 0; k < 3; k++) cl[k] >>= 4;
     for (s32 w = 0; w < 4; w++)
-        for (s32 k = 0; k < 3; k++) hub_loc[w][k] = (rest[HUB0 + w][k] << 8) - cl[k];
+        for (s32 k = 0; k < 3; k++) hub_loc[w][k] = (rest[HUB0 + w][k] * 256) - cl[k];
     s32 ix = 0, iy = 0, iz = 0;
     for (s32 i = 0; i < NN; i++) {
         s32 m = i >= HUB0 ? HUB_M : 1;
@@ -350,6 +416,9 @@ void sb_reset(Car *c)
     water_steps = 0;
     crash_cool = 0;
     frame();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (aligned) spawn_angles(c);
+#endif
     for (s32 k = 0; k < 3; k++) { prev_r[k] = ax_r[k]; prev_u[k] = ax_u[k]; prev_f[k] = ax_f[k]; }
     owner = c;
     parked = 0;
@@ -365,6 +434,9 @@ static void place(Car *c)
 {
     s32 h = c->heading >> 6, s = isin(h), co = icos(h);
     s32 nr[3] = { co, 0, -s }, nu[3] = { 0, 16384, 0 }, nf[3] = { s, 0, co };
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 aligned = original_spawn_axes(c, nr, nu, nf);
+#endif
     s32 org[3];
     for (s32 k = 0; k < 3; k++)
         org[k] = (&c->x)[k] + ((nr[k] * cl_rest[0] + nu[k] * cl_rest[1] + nf[k] * cl_rest[2]) >> 14);
@@ -381,6 +453,9 @@ static void place(Car *c)
         n->pz = n->z - c->vz;
     }
     frame();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (aligned) spawn_angles(c);
+#endif
     for (s32 k = 0; k < 3; k++) { prev_r[k] = ax_r[k]; prev_u[k] = ax_u[k]; prev_f[k] = ax_f[k]; }
     air = 0;
     parked = 0;
@@ -573,7 +648,7 @@ s32 sb_push(s32 x, s32 y, s32 z, s32 radius, s32 vx, s32 vz, s32 *push_x, s32 *p
         if (d2 >= r * r) continue;
         s32 d = isqrt(d2);
         if (!d) { dx = 1; d = 1; }
-        add_contact(i, (r - d) << 8, (dx << 14) / d, 0, (dz << 14) / d);
+        add_contact(i, (r - d) << 8, (dx * 16384) / d, 0, (dz * 16384) / d);
     }
     if (!ncon) return 0;
     s32 v0x = mean_vx(), v0z = mean_vz();
@@ -694,7 +769,7 @@ s32 sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass)
         s32 pen = (reach - l) << 4;
         if (pen <= best || !l) continue;
         best = pen; ba = bb = HUB0 + w; bt = 0;
-        bn[0] = (ex << 14) / l; bn[1] = (ey << 14) / l; bn[2] = (ez << 14) / l;
+        bn[0] = (ex * 16384) / l; bn[1] = (ey * 16384) / l; bn[2] = (ez * 16384) / l;
         for (s32 k = 0; k < 3; k++) bc[k] = (&h->x)[k] + ((bn[k] * WHEEL_R) >> 6);
     }
     if (ba < 0) return 0;
@@ -848,6 +923,47 @@ static s32 suspension(void)
     return contacts;
 }
 
+// Rare high-load tyre impulses need a wider magnitude. This is the same
+// integer square root as isqrt(), extended to the wide intermediate only.
+static s32 tyre_sqrt_wide(unsigned long long v)
+{
+    unsigned long long r = 0, bit = 1ull << 62;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return (s32)r;
+}
+
+static s32 limit_tyre_force_wide(s32 *jt, s32 *jl, s32 lim)
+{
+    long long t = *jt, l = *jl;
+    unsigned long long square = t * t + l * l;
+    if (square <= (unsigned long long)lim * lim) return 0;
+    s32 mag = square <= 0xffffffffu ? isqrt((u32)square) : tyre_sqrt_wide(square);
+    s32 k = ((long long)lim * 7) >> 3;
+    *jt = t * k / mag;
+    *jl = l * k / mag;
+    return 1;
+}
+
+// Keep the normal tyre path's exact 32-bit rounding and division. The lab
+// can make the grip limit and slip impulses too large to square in s32.
+static inline s32 limit_tyre_force(s32 *jt, s32 *jl, s32 lim)
+{
+    s32 t = *jt, l = *jl;
+    if (lim > 32767 || iabs(t) > 32767 || iabs(l) > 32767)
+        return limit_tyre_force_wide(jt, jl, lim);
+    s32 square = t * t + l * l;
+    if (square <= lim * lim) return 0;
+    s32 mag = isqrt(square), k = (lim * 7) >> 3;
+    *jt = t * k / mag;
+    *jl = l * k / mag;
+    return 1;
+}
+
 // Tyre forces: drive, brakes and cornering grip, limited by each wheel's
 // load (a friction circle). Two passes so the four tyres settle together.
 static void tyres(Car *c, u16 keys, s32 vlong)
@@ -914,11 +1030,7 @@ static void tyres(Car *c, u16 keys, s32 vlong)
         if (jl > L) jl = L;
         if (jl < -L) jl = -L;
         // The friction circle: drive, brakes and cornering share the grip.
-        if (jt * jt + jl * jl > lim * lim) {
-            s32 mag = isqrt((u32)(jt * jt) + (u32)(jl * jl));
-            s32 k = (lim * 7) >> 3;                         // sliding grips a little less
-            jt = jt * k / mag;
-            jl = jl * k / mag;
+        if (limit_tyre_force(&jt, &jl, lim)) {
             if (iabs(vt) > 200) c->skid = 1;
             if (gas && w >= 2 && vlong < 900) c->spin = 1;
         }
@@ -1054,7 +1166,7 @@ void sb_step(Car *c, u16 keys)
             // On a circuit the road bends and climbs: heights come from the
             // stretch under the car and its neighbours.
             TrackHit th;
-            if (track_find(gp_x, gp_z, &th)) gp_seg = th.seg;
+            if (track_find_road(gp_x, gp_z, &th)) gp_seg = th.seg;
             gp_ok = 1;
         } else {
             gp_ok = world_ground_plane(gp_x, gp_z, GP_R + 16, &gp_h, &gp_gx, &gp_gz);
@@ -1103,7 +1215,7 @@ void sb_step(Car *c, u16 keys)
     s32 hit = 0, land = hub_land, tilted = ax_u[1] < 12000;
     s32 nx, nz, gmax = -(1 << 30), lost = wheels_off;
     for (s32 w = 0; w < 4; w++) if (hub_gh[w] > gmax) gmax = hub_gh[w];
-    gmax += (3 - WHEEL_R) << 8;
+    gmax -= (WHEEL_R - 3) << 8;
     s32 reach = 48 + (speed >> 8);
     s32 near_wall = world_collide(cen[0] >> 8, cen[2] >> 8, reach, &nx, &nz) > 0;
     ncon = 0;
@@ -1121,7 +1233,7 @@ void sb_step(Car *c, u16 keys)
                         // The face of a step or a ramp: back the way it came.
                         s32 vx = n->x - n->px, vz = n->z - n->pz;
                         s32 l = isqrt((u32)(vx * vx) + (u32)(vz * vz));
-                        if (l > 0) add_contact(i, l, -(vx << 14) / l, 0, -(vz << 14) / l);
+                        if (l > 0) add_contact(i, l, -(vx * 16384) / l, 0, -(vz * 16384) / l);
                     } else {
                         add_contact(i, gh - n->y, 0, 16384, 0);
                     }
@@ -1189,10 +1301,10 @@ void sb_step(Car *c, u16 keys)
     c->vy = mv[1];
     c->vz = mv[2];
     s32 hlen = isqrt((u32)(ax_f[0] * ax_f[0]) + (u32)(ax_f[2] * ax_f[2]));
-    s32 hd = iatan2(ax_f[0], ax_f[2]) << 6;
+    s32 hd = iatan2(ax_f[0], ax_f[2]) * 64;
     c->heading += (s16)(hd - c->heading);
-    c->pitch = iatan2(ax_f[1], hlen) << 8;
-    c->roll = iatan2(-ax_r[1], ax_u[1]) << 8;
+    c->pitch = iatan2(ax_f[1], hlen) * 256;
+    c->roll = iatan2(-ax_r[1], ax_u[1]) * 256;
     c->bob = 0;
     c->throttle = (keys & KEY_A) != 0;
     c->hit = hit;
@@ -1253,7 +1365,7 @@ void sb_step(Car *c, u16 keys)
 
     // Into the water: it sinks, then the car comes back at the last safe spot.
     s32 cx = cen[0] >> 8, cz = cen[2] >> 8;
-    if (cen[1] < (-16 << 8) && world_in_water(cx, cz)) {
+    if (cen[1] < (-(16 << 8)) && world_in_water(cx, cz)) {
         if (!water_steps) { c->event = EV_SPLASH; sound_play(SFX_SPLASH); }
         for (s32 i = 0; i < NN; i++) {
             Node *n = &nd[i];
