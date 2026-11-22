@@ -173,7 +173,7 @@ static void take_off(Car *c)
 static void enter_loop(Car *c, s32 vlong)
 {
     c->mode = CAR_LOOP;
-    c->loop_s = c->z - (the_loop.z << 8);
+    c->loop_s = c->z - (the_loop.z * 256);
     c->loop_v = vlong;
     c->heading = 0;
     c->steer = 0;
@@ -601,11 +601,20 @@ static void loop_step(Car *c, u16 keys)
     if (c->loop_s >= len) {                  // made it round
         s32 over = c->loop_s - len;
         c->mode = CAR_GROUND;
-        c->x = (l->x + l->shift) << 8;
-        c->z = (l->z << 8) + over;
+        c->x = (l->x + l->shift) * 256;
+        c->z = (l->z * 256) + over;
         c->y = 0;
         c->vx = 0; c->vy = 0; c->vz = v;
         c->heading = 0;
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // This loop advances sideways by shift over its circumference.
+            // The exit tangent therefore has an X component; preserve it
+            // instead of teleporting the velocity back to straight ahead.
+            // Also integrate the short part of the tick past the loop end.
+            c->vx = (v * l->shift * 256) / len;
+            c->x += (over * l->shift * 256) / len;
+            c->heading = iatan2(l->shift, len / 256) * 64;
+        }
         c->pitch = 0;
         c->event = EV_LOOP;
         c->event_a = (car_speed(c) * 67) / 2560;   // mph at the exit
@@ -613,11 +622,18 @@ static void loop_step(Car *c, u16 keys)
     }
     if (c->loop_s < 0) {                     // rolled back out of the entry
         c->mode = CAR_GROUND;
-        c->x = l->x << 8;
-        c->z = (l->z << 8) + c->loop_s;
+        c->x = l->x * 256;
+        c->z = (l->z * 256) + c->loop_s;
         c->y = 0;
         c->vx = 0; c->vy = 0; c->vz = v;
         c->heading = 0;
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // Rolling back out of the loop keeps the same tangent, but a
+            // negative velocity. Original motion remains bit-identical.
+            c->vx = (v * l->shift * 256) / len;
+            c->x += (c->loop_s * l->shift * 256) / len;
+            c->heading = iatan2(l->shift, len / 256) * 64;
+        }
         c->pitch = 0;
         return;
     }

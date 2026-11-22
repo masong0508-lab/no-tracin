@@ -9,7 +9,7 @@
 const TrackDef *g_track;
 const TrackDef g_tracks[TRACK_COUNT] = {0};
 void race_on_respawn(Car *player) { (void)player; assert(!g_track); }
-const Loop the_loop = {1000,-10000,200,100,100};
+const Loop the_loop = {1000,1000,200,100,100};
 static s32 wall_z, slope_gz;
 s32 world_height(s32 x,s32 z) { (void)x;return (z-1000)*slope_gz; }
 s32 world_surface(s32 x,s32 z) { (void)x;(void)z;return SURF_ROAD; }
@@ -99,6 +99,41 @@ static void loop_contact(void)
     assert(now.x==old.x && now.y==old.y && now.z==old.z);
 }
 
+static void continuous_loop_exit(void)
+{
+    const s32 len = (the_loop.radius * 411775) >> 8;
+    const s32 base_x = the_loop.x * 256;
+    // At both exits, Newton conserves the loop's sideways tangent, while
+    // legacy mode remains unchanged so old stunt replays still work.
+    for (s32 handling = CAR_PHYS_ARCADE; handling < CAR_PHYS_COUNT; handling++) {
+        for (s32 backward = 0; backward < 2; backward++) {
+            Car old = prepare(handling, CAR_MOTION_ORIGINAL);
+            old.mode = CAR_LOOP;
+            old.loop_s = backward ? 30 : len - 30;
+            old.loop_v = backward ? -1000 : 1000;
+            Car real = prepare(handling, CAR_MOTION_NEWTON);
+            real.mode = old.mode;
+            real.loop_s = old.loop_s;
+            real.loop_v = old.loop_v;
+            car_motion_profile = CAR_MOTION_ORIGINAL;
+            car_step(&old, 0);
+            car_motion_profile = CAR_MOTION_NEWTON;
+            car_step(&real, 0);
+            assert(old.mode == CAR_GROUND && real.mode == CAR_GROUND);
+            assert(old.vx == 0 && real.vx != 0);
+            assert(old.vz == real.vz && real.vy == 0);
+            assert(old.heading == 0 && real.heading != 0);
+            // The Newton position carries the residual fractional step
+            // along the slanted tangent rather than snapping to its end.
+            if (backward) assert(real.x < base_x && old.x == base_x);
+            else assert(real.x > base_x + the_loop.shift * 256 &&
+                        old.x == base_x + the_loop.shift * 256);
+            s32 expected = (real.vz * the_loop.shift * 256) / len;
+            assert(real.vx == expected);
+        }
+    }
+}
+
 static void sloped_touchdown(void)
 {
     Car c=prepare(CAR_PHYS_ARCADE,CAR_MOTION_NEWTON);
@@ -134,8 +169,9 @@ int main(void)
 {
     r_init();
     loop_contact();
+    continuous_loop_exit();
     sloped_touchdown();
     handling_is_independent();
-    puts("PASS: independent motion, upside-down loop contact, ballistic drop, slope-normal bounce");
+    puts("PASS: independent motion, loop roof and exits, preserved tangent, gravity, landing");
     return 0;
 }
