@@ -223,7 +223,15 @@ static s32 classic_ground_dynamics(Car *c, u16 keys, s32 *vlong, s32 *vlat,
     if (g_track && world_surface(x, z) == SURF_GRASS)
         traction = (traction * 5) / 8;
     if (!c->load) c->load = 256;
-    traction = (traction * c->load) / 256;
+    s32 effective_load = c->load;
+    if (tn.downforce) {
+        // Retain the physics lab's adjustable speed-sensitive downforce.
+        s32 v4 = speed >> 4;
+        effective_load += (v4 * v4 * tn.downforce) >> 16;
+        if (effective_load < 32) effective_load = 32;
+        if (effective_load > 1024) effective_load = 1024;
+    }
+    traction = (traction * effective_load) / 256;
     if (traction < tn.grip_min) traction = tn.grip_min;
 
     s32 slide = *vlat + gravity_lat;
@@ -238,7 +246,11 @@ static s32 classic_ground_dynamics(Car *c, u16 keys, s32 *vlong, s32 *vlat,
     // A bicycle-model requested turn plus rear-slip feedback. A sluggish
     // body settles over six steps on HARD and three on RACE. Grip loss
     // reduces nose authority; the handbrake lets the tail rotate more.
-    s32 wanted = (s32)(((long long)*vlong * c->steer) / 256);
+    // Wheel lock is bounded and the speed cap avoids a slow 64-bit divide.
+    s32 yaw_speed = *vlong;
+    if (yaw_speed > 30000) yaw_speed = 30000;
+    if (yaw_speed < -30000) yaw_speed = -30000;
+    s32 wanted = (yaw_speed * c->steer) / 256;
     if (hard) wanted = wanted * 3 / 4;
     if (c->skid && !(keys & KEY_L)) wanted = wanted * 3 / 4;
     if ((keys & KEY_L) && speed > 768) wanted = wanted * 5 / 4;
