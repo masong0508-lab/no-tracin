@@ -102,13 +102,13 @@ int main(int argc, char **argv)
     status("title", frame_addr, race_addr);
     if (title_draws < 10) { fprintf(stderr, "title did not draw\n"); return 1; }
 
-    run(4, KEY_START); run(60, 0);
+    run(12, KEY_START); run(60, 0);
     shot(argv[4], "mode"); status("mode", frame_addr, race_addr);
-    run(4, KEY_A); run(80, 0);
-    if (original) { run(4, KEY_L); run(30, 0); }
-    for (int i = 0; i < course_index; i++) { run(4, KEY_RIGHT); run(30, 0); }
+    run(12, KEY_A); run(80, 0);
+    if (original) { run(12, KEY_L); run(30, 0); }
+    for (int i = 0; i < course_index; i++) { run(12, KEY_RIGHT); run(30, 0); }
     shot(argv[4], "course"); status("course", frame_addr, race_addr);
-    run(4, KEY_A); run(45, 0);
+    run(12, KEY_A); run(45, 0);
     int expected_track = (original ? 3 : 0) + course_index;
     if ((int32_t)read32(race_addr + 4) != expected_track) {
         fprintf(stderr, "Wrong selected track: expected %d, got %d\n",
