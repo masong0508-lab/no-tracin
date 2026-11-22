@@ -9,7 +9,7 @@
 typedef struct {
     s16 xyz[12];
     s16 cx, cz;
-    u16 radius;
+    u16 radius, identity;  // equal identities are byte-identical source faces
     u8 count, color, flags, reserved;
 } VrOriginalFace;
 

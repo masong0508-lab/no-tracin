@@ -768,7 +768,7 @@ static void draw_shadow(const Car *c, s32 x, s32 z, s32 h)
 EWRAM_BSS static u8 rival_faces[RIVAL_COLORS][sizeof(car_faces)];
 static const u8 rival_mats[RIVAL_COLORS] = { M_STUNT_WHITE, M_BLD2, M_LINE, M_BLD5, M_BLD4, M_GLASS, M_BLD0 };
 
-void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 depth)
+void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 roll, s32 color, s32 depth)
 {
     color %= RIVAL_COLORS;
     u8 *g = rival_faces[color];
@@ -784,7 +784,7 @@ void car_draw_rival(s32 x, s32 y, s32 z, s32 heading, s32 pitch, s32 color, s32 
         g = rival_faces[color];
     }
     s32 m[9];
-    car_matrix(heading >> 6, pitch, 0, m);
+    car_matrix(heading >> 6, pitch, roll, m);
     if (depth < 320) {
         if (depth < 200) {
             wheel(x, y, z, m, -17, -30);

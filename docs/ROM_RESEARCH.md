@@ -7,9 +7,12 @@ owner's supplied ROMs. Its goals include custom driving physics, larger worlds,
 and more ambitious track layouts. The original courses are an optional choice
 alongside No Tracin's existing original GBA work.
 
-The current milestone imports original course data into the GBA engine. It does
-not claim to replace Virtua Racing's 68000/SVP engine or reproduce all of its
-gameplay. The original executable remains the reference for further research.
+The optional course pack imports original data into the GBA engine. Its latest
+[performance and driving checks](ORIGINAL_COURSES_CONTINUATION.md) include six
+full controller-driven laps. A separate
+[native physics experiment](VR_PHYSICS_RESEARCH.md) now changes and measures
+the original 68000 speed-update routine. These are two distinct outputs; a
+complete native-engine overhaul remains in progress.
 
 ## Verified source
 
@@ -105,20 +108,21 @@ cell-boundary samples. Height and surface results had zero mismatches.
 Source-only regression tests use synthetic terrain and real No Tracin SRAM
 serialization routines. ROM-backed tests are opt-in through `VR_ROM` and do not
 store commercial fixtures. Runtime GBA validation and its remaining limits are
-recorded in the [milestone validation notes](ORIGINAL_COURSES_VALIDATION.md).
+recorded in the [initial milestone](ORIGINAL_COURSES_VALIDATION.md) and
+[continuation validation](ORIGINAL_COURSES_CONTINUATION.md).
 
 ## Next engine milestones
 
-1. Validate longer playthroughs, pit-lane entry/exit and race progression across
-   every original course; improve any unstable collision transitions.
+1. Extend the completed Free Run laps to full Arcade races, higher speeds,
+   pit-lane entry/exit and more physics settings; improve any unstable contacts.
 2. Separate route identity from nearest horizontal segment for new overpasses,
    branching shortcuts and layered roads.
 3. Represent reusable stunt surfaces with explicit orientation and contacts,
    replacing the single special city-loop path where appropriate.
 4. Extend segment and lap-distance formats or add sectors before expanding
    custom tracks beyond their existing byte-index limits.
-5. Trace original vehicle-state and steering/braking updates, prove controlled
-   executable changes, and decide which donor subsystems to retain or replace.
+5. Extend the verified native response experiment to steering and drive tables,
+   deciding which modes and opponent subsystems should share each change.
 6. Profile worst-case scenes and physics configurations before committing to
    frame-rate targets or larger active worlds.
 

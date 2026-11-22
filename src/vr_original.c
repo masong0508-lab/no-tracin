@@ -6,10 +6,14 @@
 
 #define VR_ORIGIN 8192
 #define VR_MAX_SECTIONS 166
+#define VR_MAX_SOURCE_FACES 4420
 #define VR_RESERVED_FACES 32
 
 static u8 visible[VR_MAX_SECTIONS] EWRAM_BSS;
 static s32 depths[VR_MAX_SECTIONS] EWRAM_BSS;
+// Some original sections repeat the same world-space scenery. Draw each
+// exact source face once, even when several of those sections are visible.
+static u32 drawn[(VR_MAX_SOURCE_FACES + 31) / 32] EWRAM_BSS;
 
 static const VrOriginalCourse *course_at(s32 index)
 {
@@ -168,6 +172,7 @@ IWRAM_CODE void vr_original_draw(s32 course, s32 focus_x, s32 focus_z, s32 frame
     (void)focus_x; (void)focus_z; (void)frame;
     const VrOriginalCourse *c = course_at(course);
     if (!c) return;
+    for (u32 i = 0; i < sizeof(drawn) / sizeof(drawn[0]); i++) drawn[i] = 0;
     s32 count = 0;
     for (s32 i = 0; i < c->section_count; i++) {
         const VrOriginalSection *s = &c->sections[i];
@@ -184,9 +189,13 @@ IWRAM_CODE void vr_original_draw(s32 course, s32 focus_x, s32 focus_z, s32 frame
     for (s32 k = 0; k < count; k++) {
         const VrOriginalSection *s = &c->sections[visible[k]];
         for (s32 i = 0; i < s->count; i++) {
-            if (r_faces_free() <= VR_RESERVED_FACES) return;
             const VrOriginalFace *p = &c->faces[s->first + i];
+            u32 bit = 1u << (p->identity & 31);
+            u32 *word = &drawn[p->identity >> 5];
+            if (*word & bit) continue;
+            *word |= bit;
             if (!r_visible(p->cx, p->cz, p->radius)) continue;
+            if (r_faces_free() <= VR_RESERVED_FACES) return;
             Vec3 v[4];
             for (s32 j = 0; j < p->count; j++) {
                 v[j].x=p->xyz[j*3]; v[j].y=p->xyz[j*3+1]; v[j].z=p->xyz[j*3+2];

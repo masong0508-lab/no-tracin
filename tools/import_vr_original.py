@@ -127,7 +127,7 @@ def mesh_header(courses):
     for ci, course in enumerate(courses):
         prefix = f"vr{ci}"
         palette = engine_palette(ci)
-        faces, sections = [], []
+        faces, sections, identities = [], [], {}
         for section in course["sections"]:
             first = len(faces)
             section_vertices = []
@@ -152,15 +152,22 @@ def mesh_header(courses):
                 if abs(normal[1]) >= max(abs(normal[0]), abs(normal[2])):
                     flags |= 2
                 flat = [c for v in vertices for c in v] + [0] * (12-len(vertices)*3)
-                faces.append((flat,cx,cz,radius,len(vertices),color,flags))
+                # Keep every source face and section. Repeated copies carry
+                # one identity so runtime visibility never draws them twice.
+                # Compare the complete source data, not rounded coordinates
+                # or palette matches, which could merge distinct details.
+                key = (polygon['flags'], tuple(polygon['colors']),
+                       tuple(tuple(v) for v in polygon['vertices']))
+                identity = identities.setdefault(key, len(faces))
+                faces.append((flat,cx,cz,radius,identity,len(vertices),color,flags))
             cx = round((min(v[0] for v in section_vertices)+max(v[0] for v in section_vertices))/2)
             cz = round((min(v[2] for v in section_vertices)+max(v[2] for v in section_vertices))/2)
             radius = math.ceil(max(math.hypot(v[0]-cx,v[2]-cz) for v in section_vertices))+2
             sections.append((first,len(faces)-first,cx,cz,radius))
-        require(len(faces) < 65536 and len(sections) <= 166, "Mesh index overflow")
+        require(len(faces) <= 4420 and len(sections) <= 166, "Mesh index overflow")
         out.append(f"static const VrOriginalFace {prefix}_faces[{len(faces)}] = {{")
-        for xyz,cx,cz,radius,n,color,flags in faces:
-            out.append("    {{"+",".join(map(str,xyz))+f"}}, {cx}, {cz}, {radius}, {n}, {color}, {flags}, 0"+"},")
+        for xyz,cx,cz,radius,identity,n,color,flags in faces:
+            out.append("    {{"+",".join(map(str,xyz))+f"}}, {cx}, {cz}, {radius}, {identity}, {n}, {color}, {flags}, 0"+"},")
         out.append("};")
         out.append(f"static const VrOriginalSection {prefix}_sections[{len(sections)}] = {{")
         out.extend("    {"+", ".join(map(str,s))+"}," for s in sections)
@@ -173,6 +180,7 @@ def mesh_header(courses):
         descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']} }},")
         stats.append(dict(name=course["name"],source_sections=len(sections),
                           source_polygons=course["polygon_count"],rendered_polygons=len(faces),
+                          unique_polygons=len(identities),duplicate_polygons=len(faces)-len(identities),
                           source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"]))
     out.append("static const VrOriginalCourse vr_original_courses[3] = {")
     out.extend(descriptors);out.extend(("};","#endif",""))

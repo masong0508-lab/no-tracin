@@ -1,5 +1,9 @@
 # Original-course milestone validation
 
+This records the first imported-course build. For its performance/race fixes
+and completed controller-driven laps, see the
+[continuation validation](ORIGINAL_COURSES_CONTINUATION.md).
+
 Test date: 2026-11-21. This is an optional course-data import into No Tracin's
 GBA engine, using the supplied US Virtua Racing ROM. It retains No Tracin's
 vehicle simulation, opponents, controls and race rules.

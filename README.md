@@ -150,6 +150,32 @@ validation and the next engine milestones.
 Run the source-only regression checks with `make test`. To additionally check
 the verified source ROM, set `VR_ROM` when running the Python tests.
 
+The latest pack skips repeated copies of identical source scenery, aligns
+opponents to banked roads, and fixes checkpoint/finish-tick race transitions.
+It completed six controller-driven Free Run laps across the three originals.
+See [the performance and driving checks](docs/ORIGINAL_COURSES_CONTINUATION.md)
+for the tested binary, frame rates, and coverage limits.
+
+### Original Mega Drive physics experiment
+
+The separate native-engine experiment changes the original US game's
+acceleration/braking response divisor from 225 to 180. It runs the original
+68000/SVP engine and retains the original courses. The strict patcher verifies
+the complete source image and writes a separate, reversible output:
+
+```sh
+python3 tools/patch_vr_response.py \
+  "roms/Virtua Racing (USA).md" \
+  "build/vr-physics/vr-us-response180.bin" \
+  --ips build/vr-physics/vr-us-response180.ips
+```
+
+Use a Mega Drive emulator with Virtua Racing/SVP support for this `.bin` file.
+This is a measured response experiment, not a completed replacement physics
+model. [The native physics research](docs/VR_PHYSICS_RESEARCH.md) documents the
+instruction change, restoration command, observed player/demo scope, and all
+three original-course tests.
+
 ## Source files
 | File | What's in it |
 |---|---|
@@ -175,8 +201,10 @@ Done: the 3D engine and city, stunt physics, the look and feel pass, options and
 
 The optional original-course pack adds source meshes, native terrain and road
 routes while retaining No Tracin's driving and race systems. See the
-[milestone validation notes](docs/ORIGINAL_COURSES_VALIDATION.md) for measured
-performance and the limits of the current testing.
+[current validation notes](docs/ORIGINAL_COURSES_CONTINUATION.md) for measured
+performance and the limits of the current testing. The first reversible
+[native Mega Drive physics experiment](docs/VR_PHYSICS_RESEARCH.md) is also
+implemented and tested.
 
 Planned next:
 - Race mode: a countdown timer that checkpoints extend, and a speed track through the city.

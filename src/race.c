@@ -16,7 +16,7 @@ typedef struct {
     s32 lat, lat_target;      // lateral offset from the centreline
     s32 skill;                // Q8 share of the racing line's speed
     s32 hint, timer, color, cap;
-    s32 x, y, z, heading, pitch;   // pose for drawing and collisions
+    s32 x, y, z, heading, pitch, roll;   // pose for drawing and collisions
 } Rival;
 
 // Where the rivals sit across the road (offsets from the centreline).
@@ -148,6 +148,39 @@ static void rival_pose(Rival *r)
 {
     track_point(r->s >> 8, r->lat, &r->x, &r->z, &r->y, &r->heading, &r->hint);
     r->pitch = track_pitch[r->hint];
+    r->roll = 0;
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (g_track && g_track >= g_tracks + TRACKS_PER_SET) {
+        // Original roads can bank across the lane as well as climb along it.
+        // Fit the plane beneath all four wheels: a tiny centre derivative
+        // can cross a native height-cell boundary and misrepresent the bank.
+        s32 s = isin(r->heading >> 6), c = icos(r->heading >> 6);
+        s32 rx = (17 * c) >> 14, rz = (-17 * s) >> 14;
+        s32 fx = (30 * s) >> 14, fz = (30 * c) >> 14;
+        s32 heights[4];
+        for (s32 i = 0; i < 4; i++) {
+            s32 right = i & 1 ? 1 : -1, front = i & 2 ? -1 : 1;
+            heights[i] = track_height(r->x + right * rx + front * fx,
+                                      r->z + right * rz + front * fz);
+        }
+        s32 rise_r = heights[1] + heights[3] - heights[0] - heights[2];
+        s32 rise_f = heights[0] + heights[1] - heights[2] - heights[3];
+        s32 area = 4 * (rx * fz - rz * fx);
+        // Use the actual integer sample positions, so coordinate rounding
+        // cannot introduce a false slope on a planar stretch.
+        s32 gx = (rise_r * fz - rise_f * rz) / area;
+        s32 gz = (rise_f * rx - rise_r * fx) / area;
+        if (gx >= -512 && gx <= 512 && gz >= -512 && gz <= 512) {
+            s32 along = (gx * s + gz * c) >> 14;
+            s32 across = (gx * c - gz * s) >> 14;
+            r->y = (heights[0] + heights[1] + heights[2] + heights[3]) / 4;
+            r->pitch = iatan2(along, 256);
+            // car_matrix rolls before pitching: the longitudinal slope must
+            // be included here to keep both body axes on the road plane.
+            r->roll = iatan2(-across, isqrt(256 * 256 + along * along));
+        }
+    }
+#endif
 }
 
 void race_begin(s32 track, s32 mode, Car *player)
@@ -342,19 +375,14 @@ void race_step(Car *player, s32 started)
     }
     if (!started) return;
 
-    if (g->state == RS_RACING) {
+    s32 racing = g->state == RS_RACING;
+    if (racing) {
         g->lap_steps++;
         g->total_steps++;
         if (g->extend_flash > 0) g->extend_flash--;
         if (g->mode == RACE_ARCADE) {
             if (g->time_left > 0) g->time_left--;
             if (g->time_left > 0 && g->time_left <= 600 && g->time_left % 60 == 0) sound_play(SFX_BEEP);
-            if (g->time_left == 0) {
-                g->state = RS_TIMEOVER;
-                g->end_timer = 0;
-                game_message("TIME OVER", "", PAL_RED, 600);
-                sound_play(SFX_FAIL);
-            }
         }
         // Half-lap checkpoint.
         if (g->progress >= g->lap * t->lap + t->lap / 2 && g->cp_given <= g->lap && g->lap < g->laps) {
@@ -402,6 +430,15 @@ void race_step(Car *player, s32 started)
             if (record || g->state == RS_GOAL)
                 race_records_save(g->track);
         }
+        // A checkpoint or lap reached on the last clock tick still counts.
+        // Resolve those crossings first, then end only an unfinished race
+        // whose clock remains empty after any earned time extension.
+        if (g->mode == RACE_ARCADE && g->state == RS_RACING && g->time_left == 0) {
+            g->state = RS_TIMEOVER;
+            g->end_timer = 0;
+            game_message("TIME OVER", "", PAL_RED, 600);
+            sound_play(SFX_FAIL);
+        }
     } else {
         g->end_timer++;
     }
@@ -410,7 +447,8 @@ void race_step(Car *player, s32 started)
     s32 pos = 1;
     for (s32 i = 0; i < RIVALS && g->mode == RACE_ARCADE; i++)
         if ((rivals[i].s >> 8) > g->progress) pos++;
-    if (g->state == RS_RACING) g->position = pos;
+    // Include movement on the goal tick, then freeze the finishing place.
+    if (racing) g->position = pos;
 }
 
 s32 race_done(void)
@@ -436,7 +474,7 @@ void race_draw_rivals(void)
         if (depth[i] < 0) continue;
         const Rival *r = &rivals[i];
         s32 d = i == near0 ? depth[i] : depth[i] < 320 ? 320 : depth[i];
-        car_draw_rival(r->x, r->y >> 8, r->z, r->heading, r->pitch, r->color, d);
+        car_draw_rival(r->x, r->y >> 8, r->z, r->heading, r->pitch, r->roll, r->color, d);
     }
 }
 
