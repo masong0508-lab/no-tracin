@@ -1,5 +1,9 @@
 # Original-course performance and driving validation
 
+This records the previous performance build. The next
+[race traffic checkpoint](RACE_TRAFFIC_VALIDATION.md) adds faster driving,
+complete Arcade races and the subsequent traffic/drafting fixes.
+
 Checkpoint: November 21, 2026. This continues the
 [first optional-course milestone](ORIGINAL_COURSES_VALIDATION.md). It improves
 No Tracin's GBA import of the supplied Virtua Racing courses. The independent

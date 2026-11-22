@@ -1,5 +1,11 @@
 # Original Mega Drive physics: verified response experiment
 
+> **Historical checkpoint:** This document records the original fixed 180/32
+> drive-response experiment. The patcher's default remains byte-for-byte
+> identical. See [Native controls validation](VR_CONTROLS_VALIDATION.md) for
+> the later independently selectable drive 225/180 and steering 32/48
+> settings, four-profile evidence, shared-use scope and current limits.
+
 This checkpoint changes the original **Virtua Racing (USA)** Mega Drive engine.
 The original 68000 game code and SVP renderer execute in Genesis Plus GX; the
 experiment changes one immediate operand in the game's speed update. It is

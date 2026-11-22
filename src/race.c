@@ -230,7 +230,20 @@ void race_begin(s32 track, s32 mode, Car *player)
 
 // ---------------------------------------------------------------- per step
 
-static void rivals_step(Car *player, s32 started, s32 plat)
+// Physical traffic repeats each lap; standings and rubber banding do not.
+// Most gaps are already local, so only lap-separated cars need a division.
+static s32 traffic_gap(s32 gap)
+{
+    s32 lap = g_track->lap, half = lap / 2;
+    if (gap > half || gap < -half) {
+        gap %= lap;
+        if (gap > half) gap -= lap;
+        else if (gap < -half) gap += lap;
+    }
+    return gap;
+}
+
+static void rivals_step(Car *player, s32 started, s32 road_d, s32 plat)
 {
     const TrackDef *t = g_track;
     s32 px = player->x >> 8, pz = player->z >> 8;
@@ -256,9 +269,9 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             for (s32 k = -1; k < RIVALS && ((g_race.total_steps + i) & 3) == 0; k++) {
                 if (k == i) continue;
                 s32 os, olat, ov;
-                if (k < 0) { os = g_race.progress << 8; olat = plat; ov = pspeed; }
+                if (k < 0) { os = road_d << 8; olat = plat; ov = pspeed; }
                 else { os = rivals[k].s; olat = rivals[k].lat; ov = rivals[k].v; }
-                s32 ahead = (os - r->s) >> 8;
+                s32 ahead = traffic_gap((os - r->s) >> 8);
                 if (ahead <= 0 || ahead > 150 || iabs(olat - r->lat) > 56) continue;
                 if (ov - 16 < r->cap) r->cap = ov - 16;
                 if (r->timer > 20) r->timer = 20;
@@ -277,12 +290,12 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             else if (r->lat > r->lat_target) r->lat--;
         }
         // Cars well away from the player only need their pose now and then.
-        s32 far = iabs((r->s >> 8) - g_race.progress) > r_far + 300;
+        s32 lead = traffic_gap((r->s >> 8) - road_d);
+        s32 far = iabs(lead) > r_far + 300;
         if (!far || ((g_race.total_steps + i) & 3) == 0 || !started) rival_pose(r);
         if (far) continue;
 
         // Slipstream: tucked in close behind a car at speed, the air drag drops.
-        s32 lead = (r->s >> 8) - g_race.progress;
         if (lead > 60 && lead < 450 && iabs(r->lat - plat) < 36 && pspeed > 1200) tow = 1;
 
         // Contact with the player.
@@ -306,7 +319,7 @@ static void rivals_step(Car *player, s32 started, s32 plat)
             r->lat += r->lat > plat ? shove : -shove;
             if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
             r->lat_target = r->lat;
-            if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
+            if (lead < 0) r->v = (r->v * 15) >> 4;
             else r->v += 40;
             continue;
         }
@@ -331,12 +344,13 @@ static void rivals_step(Car *player, s32 started, s32 plat)
         if (r->lat > MAX_LAT) r->lat = MAX_LAT; else if (r->lat < -MAX_LAT) r->lat = -MAX_LAT;
         r->lat_target = r->lat;
         // Whoever was behind loses a little speed.
-        if ((r->s >> 8) < g_race.progress) r->v = (r->v * 15) >> 4;
+        if (lead < 0) r->v = (r->v * 15) >> 4;
         else r->v += 40;
     }
     if (tow && player->mode == CAR_GROUND) {
-        player->vx += player->vx >> 10;
-        player->vz += player->vz >> 10;
+        s32 vx = player->vx >> 10, vz = player->vz >> 10;
+        if (sb_valid(player)) sb_add_velocity(player, vx, vz);
+        else { player->vx += vx; player->vz += vz; }
     }
     g_race.slipstream = tow;
 }
@@ -350,9 +364,11 @@ void race_step(Car *player, s32 started)
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
     s32 found = track_find(x, z, &hit);
-    rivals_step(player, started, found ? hit.lat : 0);
+    // A reset can leave race credit offset from the car's actual location.
+    // Traffic uses the current projection, or the last one if off the road.
+    s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
+    rivals_step(player, started, d, found ? hit.lat : 0);
     if (found) {
-        s32 d = t->pts[hit.seg].dist + hit.along;
         s32 delta = d - g->last_d;
         if (delta > t->lap / 2) delta -= t->lap;
         if (delta < -t->lap / 2) delta += t->lap;

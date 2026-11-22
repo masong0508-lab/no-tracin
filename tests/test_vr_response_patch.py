@@ -41,6 +41,32 @@ def read_ips(data, patch):
 
 
 class PatchInputTests(unittest.TestCase):
+    def test_independent_steering_patch_has_only_two_table_records(self):
+        fixture = bytes(ROM_SIZE)
+        result = read_ips(fixture,ips_bytes(drive_divisor=225,steering_step=48))
+        self.assertEqual(result[0x2961C:0x29622],bytes.fromhex("ffd000000030"))
+        self.assertEqual([i for i,b in enumerate(result) if b],
+                         [0x2961C,0x2961D,0x29621])
+        self.assertEqual(len(ips_bytes(drive_divisor=225,steering_step=48)),22)
+
+    def test_unsupported_settings_are_rejected(self):
+        for drive,step in ((0,32),(180,16),(225,64),(200,48)):
+            with self.subTest(drive=drive,step=step), self.assertRaisesRegex(ValueError,"Unsupported.*profile"):
+                ips_bytes(drive_divisor=drive,steering_step=step)
+
+    def test_restore_rejects_explicit_profile_flags_before_writing(self):
+        with tempfile.TemporaryDirectory(prefix="vr-restore-flags-") as directory:
+            work = Path(directory)
+            source,output = work/"source.bin",work/"output.bin"
+            source.write_bytes(b"unsupported fixture")
+            for flag,value in (("--drive-divisor","180"),("--steering-step","48")):
+                result = subprocess.run([sys.executable,str(ROOT/"tools/patch_vr_response.py"),
+                                         str(source),str(output),"--restore",flag,value],
+                                        capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,2)
+                self.assertIn("Restore identifies",result.stderr)
+                self.assertFalse(output.exists())
+
     def test_incomplete_and_headered_images_are_rejected(self):
         for size in (0,512,ROM_SIZE-1,ROM_SIZE+512):
             with self.subTest(size=size), self.assertRaisesRegex(ValueError,"Expected.*ROM bytes"):
@@ -131,6 +157,59 @@ class OriginalResponsePatchTests(unittest.TestCase):
             self.assertEqual(patched.read_bytes(),self.patched)
             self.assertEqual(restored.read_bytes(),self.data)
             self.assertEqual(ips.read_bytes(),ips_bytes())
+            self.assertEqual(self.source.read_bytes(),self.data)
+
+    def test_all_four_profiles_have_exact_edits_and_restore(self):
+        from patch_vr_response import identify_profile
+        expected_hashes = {
+            (225,32): ORIGINAL_SHA256,
+            (180,32): PATCHED_SHA256,
+            (225,48): "5c70dafd5dadc84f9a0bcacfd52e75605b67c09c92953cc56e63150be123c4ca",
+            (180,48): "6a2a7b06eef9850a803cb2240a5c28b5ddb188612a16203905fef2609b96d367",
+        }
+        for (drive,step),expected in expected_hashes.items():
+            with self.subTest(drive=drive,step=step):
+                patched = transform(self.data,drive_divisor=drive,steering_step=step)
+                self.assertEqual(hashlib.sha256(patched).hexdigest(),expected)
+                self.assertEqual(identify_profile(patched),(drive,step))
+                self.assertEqual(int.from_bytes(patched[0x18E:0x190],"big"),word_checksum(patched))
+                self.assertEqual(int.from_bytes(patched[0x295D0:0x295D2],"big"),drive)
+                self.assertEqual(int.from_bytes(patched[0x2961C:0x2961E],"big",signed=True),-step)
+                self.assertEqual(int.from_bytes(patched[0x29620:0x29622],"big"),step)
+                expected_offsets = ([0x18F,0x295D1] if drive==180 else [])
+                if step==48: expected_offsets += [0x2961D,0x29621]
+                self.assertEqual([i for i,(a,b) in enumerate(zip(self.data,patched)) if a!=b],expected_offsets)
+                self.assertEqual(read_ips(self.data,ips_bytes(drive_divisor=drive,steering_step=step)),patched)
+                self.assertEqual(read_ips(patched,ips_bytes(True,drive_divisor=drive,steering_step=step)),self.data)
+                if (drive,step)!=(225,32):
+                    self.assertEqual(transform(patched,True),self.data)
+                    with self.assertRaisesRegex(ValueError,"Unsupported input SHA256"):
+                        transform(patched,drive_divisor=drive,steering_step=step)
+        self.assertEqual(self.source.read_bytes(),self.data)
+
+    def test_nearby_modified_profile_with_repaired_checksum_is_rejected(self):
+        from patch_vr_response import identify_profile
+        data = bytearray(transform(self.data,drive_divisor=225,steering_step=48))
+        data[0x29621] = 47
+        data[0x18E:0x190] = word_checksum(data).to_bytes(2,"big")
+        with self.assertRaisesRegex(ValueError,"Unsupported input SHA256"):
+            identify_profile(bytes(data))
+        with self.assertRaisesRegex(ValueError,"Unsupported input SHA256"):
+            transform(bytes(data),True)
+
+    def test_cli_steering_only_restores_with_matching_reverse_ips(self):
+        with tempfile.TemporaryDirectory(prefix="vr-steering-cli-") as directory:
+            work=Path(directory)
+            patched,restored,reverse=work/"steering.bin",work/"restored.bin",work/"reverse.ips"
+            tool=[sys.executable,str(ROOT/"tools/patch_vr_response.py")]
+            applied=subprocess.run(tool+[str(self.source),str(patched),"--drive-divisor","225","--steering-step","48"],
+                                   capture_output=True,text=True,timeout=10)
+            self.assertEqual(applied.returncode,0,applied.stderr)
+            reverted=subprocess.run(tool+[str(patched),str(restored),"--restore","--ips",str(reverse)],
+                                    capture_output=True,text=True,timeout=10)
+            self.assertEqual(reverted.returncode,0,reverted.stderr)
+            self.assertEqual(restored.read_bytes(),self.data)
+            self.assertEqual(read_ips(patched.read_bytes(),reverse.read_bytes()),self.data)
             self.assertEqual(self.source.read_bytes(),self.data)
 
 

@@ -146,6 +146,20 @@ static s32 attached(s32 i)
     return hub_on[i - HUB0];
 }
 
+void sb_add_velocity(Car *c, s32 vx, s32 vz)
+{
+    if (!c || owner != c) return;
+    c->vx += vx;
+    c->vz += vz;
+    // Verlet velocity lives in the previous positions. A shared addition
+    // preserves the current shape and angular motion, including dents.
+    for (s32 i = 0; i < NN; i++) {
+        if (!attached(i)) continue;
+        nd[i].px -= vx;
+        nd[i].pz -= vz;
+    }
+}
+
 static void beam_set(Beam *b, s32 r)
 {
     b->r = r;

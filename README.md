@@ -150,31 +150,55 @@ validation and the next engine milestones.
 Run the source-only regression checks with `make test`. To additionally check
 the verified source ROM, set `VR_ROM` when running the Python tests.
 
-The latest pack skips repeated copies of identical source scenery, aligns
-opponents to banked roads, and fixes checkpoint/finish-tick race transitions.
-It completed six controller-driven Free Run laps across the three originals.
-See [the performance and driving checks](docs/ORIGINAL_COURSES_CONTINUATION.md)
-for the tested binary, frame rates, and coverage limits.
+The pack skips repeated copies of identical source scenery, aligns opponents
+to banks, and fixes checkpoint/finish-tick race transitions. The current build
+also fixes lapped traffic and persistent soft-body drafting, and has completed
+faster Free Run laps and full three-lap Arcade races on every original course.
+See [the current race validation](docs/RACE_TRAFFIC_VALIDATION.md) for the tested
+binary, frame rates and coverage limits, and
+[the earlier renderer measurements](docs/ORIGINAL_COURSES_CONTINUATION.md).
 
-### Original Mega Drive physics experiment
+### Original Mega Drive response options
 
-The separate native-engine experiment changes the original US game's
-acceleration/braking response divisor from 225 to 180. It runs the original
-68000/SVP engine and retains the original courses. The strict patcher verifies
-the complete source image and writes a separate, reversible output:
+The native-engine tool independently selects the original US game's drive
+response and digital steering ramp. It runs the original 68000/SVP engine
+and retains the original courses. Each supported combination has a verified
+complete-file hash; the original steering cap and release behavior stay intact.
+
+| Drive divisor | Steering step | Result |
+|---|---|---|
+| 225 | 32 | Exact original settings |
+| 180 | 32 | Stronger acceleration/braking response; previous default patch |
+| 225 | 48 | Quicker steering response with original drive response |
+| 180 | 48 | Stronger drive response and quicker steering together |
+
+The strict patcher verifies the original image and writes a separate output.
+For the combined setting:
 
 ```sh
 python3 tools/patch_vr_response.py \
   "roms/Virtua Racing (USA).md" \
-  "build/vr-physics/vr-us-response180.bin" \
-  --ips build/vr-physics/vr-us-response180.ips
+  "build/vr-physics/vr-us-response180-steering48.bin" \
+  --drive-divisor 180 --steering-step 48 \
+  --ips build/vr-physics/vr-us-response180-steering48.ips
 ```
 
 Use a Mega Drive emulator with Virtua Racing/SVP support for this `.bin` file.
-This is a measured response experiment, not a completed replacement physics
-model. [The native physics research](docs/VR_PHYSICS_RESEARCH.md) documents the
-instruction change, restoration command, observed player/demo scope, and all
-three original-course tests.
+Omitting selection flags retains the previous 180/32 output exactly. Restore
+detects any supported modified profile without selection flags:
+
+```sh
+python3 tools/patch_vr_response.py \
+  "build/vr-physics/vr-us-response180-steering48.bin" \
+  "build/vr-physics/vr-us-restored.bin" --restore
+```
+
+These are measured response options; a replacement physics model remains
+future work. [The selectable-control validation](docs/VR_CONTROLS_VALIDATION.md)
+documents original-CPU execution, all four profiles on all three courses,
+exact restoration and the observed player/demo scope. The
+[first physics experiment](docs/VR_PHYSICS_RESEARCH.md) preserves the earlier
+longitudinal-response research.
 
 ## Source files
 | File | What's in it |
@@ -201,13 +225,13 @@ Done: the 3D engine and city, stunt physics, the look and feel pass, options and
 
 The optional original-course pack adds source meshes, native terrain and road
 routes while retaining No Tracin's driving and race systems. See the
-[current validation notes](docs/ORIGINAL_COURSES_CONTINUATION.md) for measured
-performance and the limits of the current testing. The first reversible
-[native Mega Drive physics experiment](docs/VR_PHYSICS_RESEARCH.md) is also
-implemented and tested.
+[current validation notes](docs/RACE_TRAFFIC_VALIDATION.md) for measured
+performance and the limits of the current testing. Independently selectable
+[native Mega Drive steering and drive responses](docs/VR_CONTROLS_VALIDATION.md)
+are also implemented and tested.
 
 Planned next:
-- Race mode: a countdown timer that checkpoints extend, and a speed track through the city.
+- Course expansion: larger track formats, alternate routes and functional pits.
 - City life: traffic, pedestrians and cops that chase you.
 - A Payback-style HUD with hearts, lives and a minimap.
 - Missions with a city map, and save slots for progress.

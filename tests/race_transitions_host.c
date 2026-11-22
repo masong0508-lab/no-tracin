@@ -36,6 +36,11 @@ void track_point(s32 d, s32 lat, s32 *x, s32 *z, s32 *y, s32 *heading, s32 *hint
 }
 s32 car_speed(const Car *car) { (void)car; return 0; }
 s32 sb_valid(const Car *car) { (void)car; return 0; }
+void sb_add_velocity(Car *car, s32 vx, s32 vz)
+{
+    (void)car; (void)vx; (void)vz;
+    assert(0 && "Non-softbody transition fixture cannot receive a frame impulse");
+}
 s32 sb_push(s32 x, s32 y, s32 z, s32 radius, s32 vx, s32 vz, s32 *px, s32 *pz)
 {
     (void)x; (void)y; (void)z; (void)radius; (void)vx; (void)vz; (void)px; (void)pz;
