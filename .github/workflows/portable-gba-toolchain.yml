@@ -1,0 +1,51 @@
+name: Portable GNU ARM compiler for private ROM imports
+
+on:
+  push:
+    paths:
+      - '.github/workflows/portable-gba-toolchain.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debian-cross-compiler:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Debian GNU ARM cross toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi python3 tar gzip
+      - name: Package relocatable freestanding compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          arm-none-eabi-gcc --version | head -1
+          arm-none-eabi-gcc -print-libgcc-file-name
+          mkdir -p build/portable-toolchain
+          (
+            cd /
+            tar -czf "$GITHUB_WORKSPACE/build/portable-toolchain/gnu-arm-debian-trixie.tar.gz" \
+              usr/bin/arm-none-eabi-* \
+              usr/lib/gcc/arm-none-eabi \
+              usr/lib/arm-none-eabi
+          )
+          cat > build/portable-toolchain/README.txt <<'EOF'
+          GNU ARM EABI compiler and binutils from Debian Trixie.
+          No original game data or commercial assets are included.
+          Unpack this archive in a private working directory, preserving
+          usr/bin and usr/lib/gcc/arm-none-eabi. Add usr/bin to PATH.
+          Intended only for local, user-authorized GBA cartridge builds.
+          EOF
+          ls -lh build/portable-toolchain/*
+      - name: Upload compiler for user-supplied ROM rebuild
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-debian-arm-toolchain
+          path: build/portable-toolchain/
+          retention-days: 7
+          if-no-files-found: error
