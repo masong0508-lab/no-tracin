@@ -1,0 +1,46 @@
+name: Portable mGBA headless runtime
+
+on:
+  push:
+    paths:
+      - 'tests/gba_emulator_smoke.c'
+      - '.github/workflows/portable-mgba.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debian-trixie-runtime:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mGBA matching Debian Trixie
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends gcc libc6-dev libmgba-dev
+      - name: Build headless probe and runtime files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/portable
+          cc -O2 -D_GNU_SOURCE -std=c99 tests/gba_emulator_smoke.c -lmgba -lm -o build/portable/gba_emulator_smoke
+          cp -L /usr/lib/x86_64-linux-gnu/libmgba.so build/portable/libmgba.so.0.10
+          ldd build/portable/gba_emulator_smoke > build/portable/dependencies.txt
+          ldd build/portable/libmgba.so.0.10 >> build/portable/dependencies.txt
+          cat > build/portable/README.txt <<'EOF'
+          Linux x86_64 mGBA headless core, built on Debian Trixie.
+          Intended for local regression testing only; does not contain ROMs.
+          Run with LD_LIBRARY_PATH pointing to this directory.
+          The probe accepts: game.gba g_frames_hex g_race_hex screenshots_dir
+          EOF
+          chmod +x build/portable/gba_emulator_smoke
+      - name: Upload runtime for private local tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-tracin-headless-mgba-runtime
+          path: build/portable/
+          retention-days: 7
+          if-no-files-found: error
