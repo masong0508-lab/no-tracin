@@ -279,6 +279,45 @@ static void apply_rigid(void)
 
 // ---------------------------------------------------------------- building
 
+#ifdef WITH_VR_ORIGINAL_TRACKS
+// A fresh car on an imported bank must start with its frame parallel to the
+// road. A horizontal frame puts the uphill wheels inside the road and the
+// first suspension correction can overturn it. This only sets a grounded
+// spawn/teleport pose; ordinary simulation continues to choose its own axes.
+static s32 original_spawn_axes(const Car *c, s32 *right, s32 *up, s32 *forward)
+{
+    if (!g_track || g_track < g_tracks + TRACKS_PER_SET || c->mode != CAR_GROUND) return 0;
+    s32 gx, gz;
+    track_gradient(c->x >> 8, c->z >> 8, &gx, &gz);
+    // Discontinuous terrain at a wall is not a road plane to stand on.
+    if ((!gx && !gz) || gx < -512 || gx > 512 || gz < -512 || gz > 512) return 0;
+    s32 s = isin(c->heading >> 6), co = icos(c->heading >> 6);
+    up[0] = -gx; up[1] = 256; up[2] = -gz;
+    normalize(up);
+    // Preserve the intended horizontal heading while following the grade.
+    forward[0] = s >> 6;
+    forward[1] = (gx * s + gz * co) >> 14;
+    forward[2] = co >> 6;
+    normalize(forward);
+    right[0] = (up[1] * forward[2] - up[2] * forward[1]) >> 14;
+    right[1] = (up[2] * forward[0] - up[0] * forward[2]) >> 14;
+    right[2] = (up[0] * forward[1] - up[1] * forward[0]) >> 14;
+    normalize(right);
+    forward[0] = (right[1] * up[2] - right[2] * up[1]) >> 14;
+    forward[1] = (right[2] * up[0] - right[0] * up[2]) >> 14;
+    forward[2] = (right[0] * up[1] - right[1] * up[0]) >> 14;
+    normalize(forward);
+    return 1;
+}
+
+static void spawn_angles(Car *c)
+{
+    s32 horizontal = isqrt((u32)(ax_f[0] * ax_f[0]) + (u32)(ax_f[2] * ax_f[2]));
+    c->pitch = iatan2(ax_f[1], horizontal) * 256;
+    c->roll = iatan2(-ax_r[1], ax_u[1]) * 256;
+}
+#endif
+
 void sb_reset(Car *c)
 {
     // The frame's axes at rest, measured in car axes.
@@ -293,12 +332,24 @@ void sb_reset(Car *c)
     ax_f[0] = s;  ax_f[1] = 0;     ax_f[2] = co;
     ax_r[0] = co; ax_r[1] = 0;     ax_r[2] = -s;
     ax_u[0] = 0;  ax_u[1] = 16384; ax_u[2] = 0;
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 aligned = original_spawn_axes(c, ax_r, ax_u, ax_f);
+#endif
     for (s32 i = 0; i < NN; i++) {
         s32 lx = rest[i][0] << 8, ly = rest[i][1] << 8, lz = rest[i][2] << 8;
         Node *n = &nd[i];
+#ifdef WITH_VR_ORIGINAL_TRACKS
+        if (aligned) {
+            n->x = c->x + ((ax_r[0] * lx + ax_u[0] * ly + ax_f[0] * lz) >> 14);
+            n->y = c->y + ((ax_r[1] * lx + ax_u[1] * ly + ax_f[1] * lz) >> 14);
+            n->z = c->z + ((ax_r[2] * lx + ax_u[2] * ly + ax_f[2] * lz) >> 14);
+        } else
+#endif
+        {
         n->x = c->x + ((ax_r[0] * lx + ax_f[0] * lz) >> 14);
         n->y = c->y + ly;
         n->z = c->z + ((ax_r[2] * lx + ax_f[2] * lz) >> 14);
+        }
         n->px = n->x - c->vx;
         n->py = n->y - c->vy;
         n->pz = n->z - c->vz;
@@ -350,6 +401,9 @@ void sb_reset(Car *c)
     water_steps = 0;
     crash_cool = 0;
     frame();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (aligned) spawn_angles(c);
+#endif
     for (s32 k = 0; k < 3; k++) { prev_r[k] = ax_r[k]; prev_u[k] = ax_u[k]; prev_f[k] = ax_f[k]; }
     owner = c;
     parked = 0;
@@ -365,6 +419,9 @@ static void place(Car *c)
 {
     s32 h = c->heading >> 6, s = isin(h), co = icos(h);
     s32 nr[3] = { co, 0, -s }, nu[3] = { 0, 16384, 0 }, nf[3] = { s, 0, co };
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 aligned = original_spawn_axes(c, nr, nu, nf);
+#endif
     s32 org[3];
     for (s32 k = 0; k < 3; k++)
         org[k] = (&c->x)[k] + ((nr[k] * cl_rest[0] + nu[k] * cl_rest[1] + nf[k] * cl_rest[2]) >> 14);
@@ -381,6 +438,9 @@ static void place(Car *c)
         n->pz = n->z - c->vz;
     }
     frame();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (aligned) spawn_angles(c);
+#endif
     for (s32 k = 0; k < 3; k++) { prev_r[k] = ax_r[k]; prev_u[k] = ax_u[k]; prev_f[k] = ax_f[k]; }
     air = 0;
     parked = 0;

@@ -31,6 +31,7 @@ typedef struct {
 static Face faces[MAX_FACES];
 static s16  heads[BUCKETS];
 static s32  face_count;
+s32 r_faces_free(void) { return MAX_FACES - face_count; }
 s32 r_far = FAR_MENU, r_far_min = FAR_MENU, r_far_max = FAR_MENU;
 s32 r_fog1 = FOG1_TRACK, r_fog2 = FOG2_TRACK;
 

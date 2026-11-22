@@ -1,2 +1,10 @@
 build/
 __pycache__/
+
+# Original commercial source images and private generated imports stay local.
+roms/
+*.md.rom
+*.gen
+*.smd
+*.bin
+*.sav

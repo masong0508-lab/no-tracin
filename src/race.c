@@ -20,10 +20,21 @@ typedef struct {
 } Rival;
 
 // Where the rivals sit across the road (offsets from the centreline).
-#define GRID_LAT   (TRACK_HALF_W * 9 / 20)    // the two columns of the grid
-#define PASS_LAT   (TRACK_HALF_W / 2 + 8)     // pulling out to pass
-#define WANDER_LAT (TRACK_HALF_W / 2 - 4)     // drifting about the road
-#define MAX_LAT    (TRACK_HALF_W - 30)        // shoved toward the edge
+// Imported courses can be narrower: every lane fits the narrowest segment.
+static s32 race_half_width = TRACK_HALF_W;
+static inline s32 lane_limit(void)
+{
+    return race_half_width > 30 ? race_half_width - 30 : 0;
+}
+static inline s32 lane_offset(s32 desired)
+{
+    s32 limit = lane_limit();
+    return desired < limit ? desired : limit;
+}
+#define GRID_LAT   lane_offset(race_half_width * 9 / 20) // the two columns of the grid
+#define PASS_LAT   lane_offset(race_half_width / 2 + 8)  // pulling out to pass
+#define WANDER_LAT lane_offset(race_half_width / 2 - 4)  // drifting about the road
+#define MAX_LAT    lane_limit()                         // shoved toward the edge
 #define GRID_GAP   96                         // between grid slots, staggered left and right
 
 static Rival rivals[RIVALS] EWRAM_BSS;
@@ -61,17 +72,50 @@ static char *put_race_time(char *p, s32 steps)
 // ---------------------------------------------------------------- records
 
 #define REC_MAGIC 0x3256544E      // "NTV2": the courses grew, older records don't count
-typedef struct { s32 best_lap[TRACK_COUNT], best_race[TRACK_COUNT]; } RaceRecords;
-static RaceRecords recs;
+// Keep each bank in the original three-course layout. Installing or removing
+// the optional ROM courses must not resize or overwrite existing custom times.
+typedef struct { s32 best_lap[TRACKS_PER_SET], best_race[TRACKS_PER_SET]; } RaceRecords;
+static RaceRecords recs[TRACK_SET_COUNT];
+
+static u32 records_magic(s32 set)
+{
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (set == TRACK_SET_ORIGINAL) return 0x31524F56 ^ g_vr_original_pack_version;
+#else
+    (void)set;
+#endif
+    return REC_MAGIC;
+}
+
+static u32 records_address(s32 set)
+{
+    return set == TRACK_SET_CUSTOM ? RACE_SAVE_AT : ORIGINAL_RACE_SAVE_AT;
+}
+
+static void race_records_save(s32 track)
+{
+    if (track < 0 || track >= TRACK_COUNT) return;
+    s32 set = track / TRACKS_PER_SET;
+    save_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set]));
+}
 
 void race_records_load(void)
 {
-    if (!load_blob(REC_MAGIC, RACE_SAVE_AT, &recs, sizeof(recs)))
-        for (s32 i = 0; i < TRACK_COUNT; i++) recs.best_lap[i] = recs.best_race[i] = 0;
+    for (s32 set = 0; set < TRACK_SET_COUNT; set++) {
+        if (!load_blob(records_magic(set), records_address(set), &recs[set], sizeof(recs[set])))
+            for (s32 i = 0; i < TRACKS_PER_SET; i++)
+                recs[set].best_lap[i] = recs[set].best_race[i] = 0;
+    }
 }
 
-s32 race_best_lap(s32 track) { return recs.best_lap[track]; }
-s32 race_best_time(s32 track) { return recs.best_race[track]; }
+s32 race_best_lap(s32 track)
+{
+    return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_lap[track % TRACKS_PER_SET] : 0;
+}
+s32 race_best_time(s32 track)
+{
+    return track >= 0 && track < TRACK_COUNT ? recs[track / TRACKS_PER_SET].best_race[track % TRACKS_PER_SET] : 0;
+}
 
 // ---------------------------------------------------------------- setup
 
@@ -114,6 +158,11 @@ void race_begin(s32 track, s32 mode, Car *player)
     const TrackDef *t = g_track;
     g->mode = mode;
     g->track = track;
+    race_half_width = track_half_width(0);
+    for (s32 i = 1; i < t->count; i++) {
+        s32 width = track_half_width(i);
+        if (width < race_half_width) race_half_width = width;
+    }
     g->laps = mode == RACE_ARCADE ? t->laps : 9999;     // free run goes on until you quit
     g->time_left = t->start_time * 60;
     build_line_speed();
@@ -137,7 +186,7 @@ void race_begin(s32 track, s32 mode, Car *player)
         r->v = 0;
         r->lat = r->lat_target = lat;
         // The front of the grid is quicker; it spreads the field out.
-        r->skill = 244 - i * 6 + track * 2 + rnd(4);
+        r->skill = 244 - i * 6 + (track % TRACKS_PER_SET) * 2 + rnd(4);
         r->hint = 0;
         r->timer = 60 + rnd(120);
         r->color = i;
@@ -263,6 +312,8 @@ void race_step(Car *player, s32 started)
 {
     Race *g = &g_race;
     const TrackDef *t = g_track;
+    RaceRecords *records = &recs[g->track / TRACKS_PER_SET];
+    s32 record_index = g->track % TRACKS_PER_SET;
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
     s32 found = track_find(x, z, &hit);
@@ -276,7 +327,7 @@ void race_step(Car *player, s32 started)
         g->last_d = d;
         g->hint = hit.seg;
         // Respawn on the centreline here after a wreck.
-        if (player->mode == CAR_GROUND && hit.dist < TRACK_HALF_W && (g->total_steps & 15) == 0) {
+        if (player->mode == CAR_GROUND && hit.dist < track_half_width(hit.seg) && (g->total_steps & 15) == 0) {
             s32 sx, sz, sy, sh, sint = hit.seg;
             track_point(d, 0, &sx, &sz, &sy, &sh, &sint);
             player->safe_x = sx;
@@ -320,10 +371,10 @@ void race_step(Car *player, s32 started)
             if (g->lap < MAX_LAPS) g->lap_times[g->lap] = g->lap_steps;
             if (!g->best_lap || g->lap_steps < g->best_lap) g->best_lap = g->lap_steps;
             char a[24], b[24];
-            s32 record = !recs.best_lap[g->track] || g->lap_steps < recs.best_lap[g->track];
+            s32 record = !records->best_lap[record_index] || g->lap_steps < records->best_lap[record_index];
             put_race_time(put(b, record ? "BEST LAP " : "LAP "), g->lap_steps);
             if (record) {
-                recs.best_lap[g->track] = g->lap_steps;
+                records->best_lap[record_index] = g->lap_steps;
                 g->new_best_lap = 1;
             }
             g->lap++;
@@ -332,8 +383,8 @@ void race_step(Car *player, s32 started)
                 g->state = RS_GOAL;
                 g->end_timer = 0;
                 if (g->mode == RACE_ARCADE &&
-                    (!recs.best_race[g->track] || g->total_steps < recs.best_race[g->track])) {
-                    recs.best_race[g->track] = g->total_steps;
+                    (!records->best_race[record_index] || g->total_steps < records->best_race[record_index])) {
+                    records->best_race[record_index] = g->total_steps;
                     g->new_best_race = 1;
                 }
                 game_message("GOAL!", b, PAL_YELLOW, 600);
@@ -349,7 +400,7 @@ void race_step(Car *player, s32 started)
                 sound_play(record ? SFX_BEST : SFX_LAP);
             }
             if (record || g->state == RS_GOAL)
-                save_blob(REC_MAGIC, RACE_SAVE_AT, &recs, sizeof(recs));
+                race_records_save(g->track);
         }
     } else {
         g->end_timer++;
@@ -447,6 +498,10 @@ void race_results(void)
     for (s32 i = 0; i < 12; i++) { lp[i] = left[i]; rp[i] = right[i]; hi[i] = 0; }
     put(left[n], "COURSE");
     put(right[n++], g_tracks[g->track].name);
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    put(left[n], "COURSE SET");
+    put(right[n++], track_set_name(g->track / TRACKS_PER_SET));
+#endif
     if (g->mode == RACE_ARCADE) {
         put(left[n], "POSITION");
         if (g->state == RS_GOAL) { char *p = put_num(right[n], g->position); put(p, ordinals[g->position - 1]); }

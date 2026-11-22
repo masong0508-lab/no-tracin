@@ -1,0 +1,24 @@
+name: Build and source checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gba:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends gcc-arm-none-eabi binutils-arm-none-eabi
+      - name: Source regression checks
+        run: make test
+      - name: Build standard GBA game
+        run: make -j2
+      - name: Verify generated custom course data
+        run: git diff --exit-code -- src/tracks_data.h src/tracks_dims.h

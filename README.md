@@ -2,7 +2,7 @@
 
 A stunt-driving game for the Game Boy Advance: Race Drivin' (Genesis) mixed with Payback (GBA) and Virtua Racing. You drive a flat-shaded 3D city, Freedom City, with a Stunt Park (a loop, a banked curve and a canal jump), street ramps, tricks, stars to find and cheat codes. The Virtua Edition adds three race circuits in the style of Virtua Racing's courses, an arcade race against seven CPU cars, and a Virtua-style menu.
 
-Everything in the game is drawn and played by its own code. No code, graphics or sound from either original ROM is in it, so `notracin.gba` can be shared. The original ROMs you own are not part of this folder and should not be shared.
+The standard `notracin.gba` build uses this project's own code and assets. The optional original-course build described below imports course data from a locally supplied Virtua Racing ROM. Source ROMs and generated imported assets are kept outside the tracked source tree.
 
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
@@ -31,7 +31,7 @@ Hold A during the 3-2-1 countdown to rev the engine.
 - **Cameras:** Chase, Far Chase, Overhead, Cockpit. The chase cameras look into turns, pull back with speed, watch the loop from the side, and shake on hard landings and crashes.
 
 ## Circuits
-Three courses laid out after Virtua Racing's (rebuilt by hand from the corner order, hills and landmarks; no data comes from that game):
+The standard build has three custom courses inspired by Virtua Racing's corner order, hills and landmarks:
 
 | Course | Level | What's on it |
 |---|---|---|
@@ -97,7 +97,7 @@ Pause, choose CHEATS and press the buttons in order. Type a code again to turn i
 - Crashes: a wall above about 45 mph or a hard landing sends the car tumbling; the canal sinks it. It resets after a short wait, or use Reset Car.
 
 ## Look and sound
-- Sky gradient, a two-layer city skyline that turns with the camera, and distance haze. It holds 30 fps; on the busiest views the draw distance pulls in a little and the haze hides the edge.
+- Sky gradient, a two-layer city skyline that turns with the camera, and distance haze. Busy views reduce the draw distance; measured rendering rates depend on the course and physics settings.
 - A detailed car with a shadow that follows ramps and banks.
 - Effects: tyre smoke, burnout smoke, skid marks, dust, sparks, nitro flames, fire and black smoke after a wreck, and a splash in the canal.
 - Sound on the GBA's four built-in channels: engine following the revs through the gears, tyre squeal, wind in the air and on nitro, landing thumps, crashes, splashes, and jingles for stunts, checkpoints, laps and the countdown. There is no music yet.
@@ -109,6 +109,46 @@ The game is C with a little ARM assembly. No devkitPro is needed.
 3. `make clean` removes the build.
 
 The project has its own startup code (`src/crt0.s`) and linker script (`gba.ld`). Speed-critical code runs from the GBA's fast internal RAM as ARM code (marked `IWRAM_CODE`), and the linker script puts the division routines there too. `tools/fixheader.py` fills in the ROM header checksum.
+
+### Optional original Virtua Racing courses
+
+The standard build keeps the three custom courses and Stunt City. An optional
+local import adds the original Mega Drive **Big Forest, Bay Bridge and Acropolis**
+as a second course set. It reads the original meshes, native road routes,
+collision surfaces and height planes from your own source ROM.
+
+```sh
+make vr-original VR_ROM="/path/to/Virtua Racing (USA).md"
+```
+
+The result is `build/vr-original/notracin-vr-original.gba`. Open it in a GBA
+emulator with the existing skip-BIOS-intro setting. Choose **Arcade** or
+**Free Run**, then press **L/R** on the course screen to switch between
+**CUSTOM COURSES** and **VR ORIGINALS**. Left/right selects one of the three
+courses in that set. Boot still starts with the custom set, and Stunt City
+remains a separate choice. Original and custom best times use separate save
+records; existing custom saves keep their original layout.
+
+The first supported source is the 2,097,152-byte US revision, product
+`MK-1229 -00`, with SHA-256
+`291e74f9b4d5a2c0f2b7cbf6f2e0fbf72c16cb6d83b1f58dda78209f9a64c486`.
+The importer verifies the complete file before reading its tables. A different
+revision needs its own verified offsets; renaming a file does not select one.
+
+This course pack uses No Tracin's car, controls, opponents and race rules.
+Original geometry is converted at one uniform scale; source colors are mapped
+to the existing GBA palette and themes. Pit-lane geometry is present, while
+pit-service behaviour and alternate-route race logic are future engine work.
+The Mega Drive ROM itself is not modified by this build.
+
+Generated headers, the imported build and its provenance manifest stay under
+`build/`. The source repository contains the importer and runtime integration.
+Keep source ROMs in `roms/` or outside the checkout. See
+[the ROM research notes](docs/ROM_RESEARCH.md) for the recovered formats,
+validation and the next engine milestones.
+
+Run the source-only regression checks with `make test`. To additionally check
+the verified source ROM, set `VR_ROM` when running the Python tests.
 
 ## Source files
 | File | What's in it |
@@ -133,7 +173,10 @@ The project has its own startup code (`src/crt0.s`) and linker script (`gba.ld`)
 ## Status and what's next
 Done: the 3D engine and city, stunt physics, the look and feel pass, options and saves, tricks, nitro, stars and cheats.
 
-Circuits run at 20 to 30 fps (Acropolis, with the most hills, sits nearer 20).
+The optional original-course pack adds source meshes, native terrain and road
+routes while retaining No Tracin's driving and race systems. See the
+[milestone validation notes](docs/ORIGINAL_COURSES_VALIDATION.md) for measured
+performance and the limits of the current testing.
 
 Planned next:
 - Race mode: a countdown timer that checkpoints extend, and a speed track through the city.

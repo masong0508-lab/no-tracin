@@ -7,7 +7,14 @@
 #include "gba.h"
 #include "tracks_dims.h"      // TRACK_HALF_W, TRACK_WORLD and the grids (from tools/mktracks.py)
 
-#define TRACK_COUNT  3
+#define TRACKS_PER_SET 3
+enum { TRACK_SET_CUSTOM, TRACK_SET_ORIGINAL };
+#ifdef WITH_VR_ORIGINAL_TRACKS
+#define TRACK_SET_COUNT 2
+#else
+#define TRACK_SET_COUNT 1
+#endif
+#define TRACK_COUNT (TRACKS_PER_SET * TRACK_SET_COUNT)
 
 // One sample along the centreline; the road runs from this point to the next.
 typedef struct {
@@ -39,10 +46,18 @@ typedef struct {
     u8 water_count;
     u8 laps, start_time, cp_time;   // race length, seconds on the clock
     u8 scene;                 // backdrop style (SCENE_*)
+    const u16 *half_widths;    // optional width per segment; NULL uses TRACK_HALF_W
 } TrackDef;
 
 extern const TrackDef g_tracks[TRACK_COUNT];
 extern const TrackDef *g_track;        // NULL in Freedom City
+#ifdef WITH_VR_ORIGINAL_TRACKS
+// Identifies the imported geometry revision, so its records cannot be
+// mistaken for times from a different conversion of the source courses.
+extern const u32 g_vr_original_pack_version;
+#endif
+const char *track_set_name(s32 set);
+s32 track_half_width(s32 seg);
 
 // Nearest point on the road. Returns 0 when (x, z) is nowhere near it.
 typedef struct {

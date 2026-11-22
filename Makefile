@@ -30,6 +30,41 @@ build:
 clean:
 	rm -rf build notracin.gba racedrivin.gba
 
+# Optional local import. Its generated data and all objects stay separate from
+# the normal build, so changing packs cannot accidentally reuse stale objects.
+VR_BUILD := build/vr-original
+VR_OBJS := $(patsubst build/%.o,$(VR_BUILD)/%.o,$(OBJS)) $(VR_BUILD)/vr_original.o
+VR_FLAGS := $(CFLAGS) -DWITH_VR_ORIGINAL_TRACKS -I$(VR_BUILD)
+VR_HEADERS := $(VR_BUILD)/vr_original_tracks.h $(VR_BUILD)/vr_original_mesh.h
+
+.PHONY: vr-original test
+vr-original:
+	@test -n "$(VR_ROM)" || (echo 'Supply VR_ROM="/path/to/Virtua Racing (USA).md"' >&2; exit 2)
+	python3 tools/import_vr_original.py --rom "$(VR_ROM)" --output-dir $(VR_BUILD)
+	$(MAKE) $(VR_BUILD)/notracin-vr-original.gba
+
+$(VR_BUILD)/notracin-vr-original.gba: $(VR_BUILD)/notracin.elf
+	$(OBJCOPY) -O binary $< $@
+	python3 tools/fixheader.py $@
+
+$(VR_BUILD)/notracin.elf: $(VR_OBJS) gba.ld
+	$(CC) $(LDFLAGS) $(VR_OBJS) -lgcc -o $@
+
+$(VR_BUILD)/crt0.o: src/crt0.s | $(VR_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VR_BUILD)/fill.o: src/fill.s | $(VR_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VR_BUILD)/%.o: src/%.c $(wildcard src/*.h) $(VR_HEADERS) | $(VR_BUILD)
+	$(CC) $(VR_FLAGS) -c $< -o $@
+
+$(VR_BUILD):
+	mkdir -p $@
+
+test:
+	python3 -m unittest discover -s tests -p 'test_*.py' -v
+
 build/track.o: src/tracks_data.h
 
 src/tracks_data.h src/tracks_dims.h &: tools/mktracks.py
