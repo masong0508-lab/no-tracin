@@ -4,8 +4,9 @@ Checkpoint: 2026-11-22. No Tracin' branch `improve/original-virtua-courses-20261
 
 ## Scope and provenance
 
-No Atari Hard Drivin'/Race Drivin' physics executable or source has been
-uploaded. **HARD STYLE** and **RACE STYLE** are new original GBA C
+The US Sega Genesis Race Drivin' cartridge has since been supplied and
+verified, but the Atari arcade TMS34010 physics ROM/source and the
+Genesis cartridge's specific dynamics routines have not been recovered. **HARD STYLE** and **RACE STYLE** are new original GBA C
 approximations, **not Atari physics code**. The existing SOFT-BODY and
 ARCADE modes are preserved. The four choices occupy the existing option
 byte 14 within the original 16-byte SRAM options record: no Car, Race,
@@ -52,9 +53,10 @@ makes no new long-run FPS or physical-hardware claim.
 
 ## Upcoming 32X Deluxe work
 
-The 32X game ROM has not been supplied. `tools/probe_vr_32x.py` only
-reports Sega header metadata and full-image SHA-256, without modifying or
-importing source data. The next authorized-ROM milestone must independently
+The 32X US cartridge is now supplied and verified by whole-file SHA256 and
+Sega checksum (see `NEWTON_MOTION_AND_ROM_INPUTS.md`).
+`tools/probe_vr_32x.py` reports metadata only; it still cannot decode or
+import Deluxe course data. The next authorized-ROM milestone must independently
 reverse-engineer five original circuits (including Highland and Sand Park),
 three vehicle classes, tunnel/pit paths, multiple branches and larger scenery
 tables. The fixed three-courses-per-set UI and records must be generalized

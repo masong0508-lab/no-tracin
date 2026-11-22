@@ -1,8 +1,8 @@
 # 32X Virtua Racing Deluxe and Hard/Race Drivin' physics groundwork
 
 Checkpoint: November 22, 2026. This document distinguishes features we can
-implement and test today from features that require the user's forthcoming
-32X ROM or inspectable Hard Drivin'/Race Drivin' physics code.
+implement and test today from features requiring decoding of the now-supplied
+32X ROM or the original Hard Drivin'/Race Drivin' physics routines.
 
 ## What the additional 32X cart offers
 
@@ -19,16 +19,19 @@ References: Sega's 32X Deluxe manual, and the game descriptions below:
 - https://rq87.flyingomelette.com/RQ/32X/vr.html
 - https://www.retrogamesreview.co.uk/2015/05/virtua-racing-deluxe-32x-review.html
 
-**The 32X source ROM has not yet been supplied.** The local `tools/probe_vr_32x.py`
-uses read-only 0x100–0x200 Sega header metadata and full-image SHA-256 to
-identify a file without changing it. It does not guess a course-data offset,
+**The US 32X source ROM is now supplied and verified**: Sega product
+`GM MK-84601-00`, 3,145,728 bytes, SHA256
+`cc2917895842ba42ce871a07a327c5467a5b5df8b7999ccc4b7b5bea9d4caf6b`.
+The read-only `tools/audit_uploaded_cartridges.py` checks its complete hash,
+header, reset vector and 16-bit Sega checksum (`1e4d`) without modifying it.
+The local `tools/probe_vr_32x.py` also reports 0x100–0x200 Sega metadata. It does not guess a course-data offset,
 assemble a playable ROM, or accept the existing Genesis/SVP importer offsets.
 ROMs that do not identify themselves as byte-ordered Sega 32X are rejected;
 regional and format variations will require their own verification.
 
-Once the 32X ROM arrives:
-1. Record its exact file hash, byte size, region, product revision and header
-   format privately; never overwrite it or commit proprietary source/data.
+With the 32X ROM available:
+1. Preserve the already checked full-file hash, region and revision
+   privately; never overwrite it or commit proprietary source/data.
 2. Audit course/entity tables, coordinate scale, 32X-specific transforms,
    terrain collision and route graphs **against emulator observations**.
 3. Add a new importer guarded by exact full-file hash, not a fallback in
@@ -66,7 +69,7 @@ source and compare real car-state traces.
 
 ## New playable handling switch (experimental, not original Atari code)
 
-The **PHYSICS** setting now offers four options in the existing SRAM slot:
+The **HANDLING** setting offers four options in existing SRAM slot 14:
 - **SOFT-BODY**: unchanged 22-node, spring-and-beam damage simulation
 - **ARCADE**: unchanged No Tracin' lightweight car dynamics
 - **HARD STYLE**: a bounded, deterministic, lower-grip, slower-steering,
@@ -92,3 +95,20 @@ will need original code or ROM identity, CPU mapping, operating state/timing,
 steering/gear/torque curves, tire slip and suspension response, trace
 comparison on several roads, and repeatable tests that show parity. Any
 unverified approximation remains clearly labeled as such.
+
+## Separate user-requested physical simulation
+
+The newly selectable **MOTION PHYS** setting (Original/Newton) is in the
+formerly unused 16th option byte. It controls loop contact and ballistic
+release independently from HANDLING. In Newton mode a car detaches whenever
+`v^2/R + g cos(theta)` becomes negative, and sloped ground impacts return
+momentum along the road normal. This is a tested GBA-native implementation,
+not traced original Atari/Genesis game code.
+
+The supplied **US Sega Genesis Race Drivin'** ROM is the 524,288-byte
+`GM T-48246 -00` 1993 cartridge, verified SHA256
+`bd86c32fba134c64c9698d939b9d679ad93b77a2864019b63effad1be96002e5`
+and Sega checksum `bd49`. It is a different 68000 software port from the
+Atari original arcade physics hardware. Its exact physics code is not yet
+identified, so provenance must be established before claiming a real
+code transplant.

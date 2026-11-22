@@ -43,6 +43,26 @@ class Cartridges(unittest.TestCase):
             b=bytearray(sample(b"SEGA GENESIS"));b[4:8]=b"\x00\x00\x00\x01";p.write_bytes(b)
             with self.assertRaisesRegex(ValueError,"reset"):cart.inspect(p)
 
+    def test_32x_never_enters_genesis_svp_importer(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            fake = base / "fake32x.rom"
+            fake.write_bytes(sample(b"SEGA 32X U"))
+            cases = [fake]
+            supplied = os.environ.get("VR32X_ROM")
+            if supplied and Path(supplied).is_file():
+                cases.append(Path(supplied))
+            for i, source in enumerate(cases):
+                output = base / ("wrong-import-" + str(i))
+                result = subprocess.run([
+                    sys.executable, str(ROOT / "tools/import_vr_original.py"),
+                    "--rom", str(source), "--output-dir", str(output)],
+                    text=True, capture_output=True, timeout=20)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(output.exists())
+
     def test_exact_uploaded_roms_when_supplied(self):
         sources = ((os.environ.get("RACE_DRIVIN_ROM"),"race_drivin_genesis"),
                    (os.environ.get("VR32X_ROM"),"virtua_racing_deluxe_32x"))

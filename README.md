@@ -245,7 +245,7 @@ Planned next:
 
 ### Experimental classic driving profiles and upcoming Sega 32X support
 
-**Options → PHYSICS** now offers **SOFT-BODY**, **ARCADE**, **HARD STYLE** and
+**Options → HANDLING** now offers **SOFT-BODY**, **ARCADE**, **HARD STYLE** and
 **RACE STYLE**. The last two use separate lightweight GBA-native steering,
 slip and yaw response models inspired by early 3D driving simulators. They
 are **not** a port of the original Atari Hard Drivin'/Race Drivin' ROM code;
@@ -254,9 +254,29 @@ layout are unchanged. See [32X and classic physics roadmap](docs/32X_AND_CLASSIC
 for proven capabilities and the remaining code-research work.
 
 The supplied Sega Genesis/SVP import and its three original courses remain
-unchanged. The Sega **32X Virtua Racing Deluxe** ROM has not been provided
-or imported yet. When supplied, run the read-only
-`python3 tools/probe_vr_32x.py /path/to/your/rom.32x` to record its exact
-identity without rewriting it. Deluxe's two extra courses, alternate roads,
+unchanged. The Sega **32X Virtua Racing Deluxe** ROM has now been supplied
+and its US cartridge header and full-file hash independently verified, but its
+course geometry is **not imported yet**. Use the read-only
+`python3 tools/audit_uploaded_cartridges.py --require-known /path/to/your/rom.32x`
+to verify the exact image without rewriting it. Deluxe's two extra courses, alternate roads,
 three vehicle classes and additional scenery will require a separate
 version-verified importer and updated course-selection data structures.
+
+### Independent Motion Physics — gravity, loops and falling
+
+Options now has **two independent settings**, not four interchangeable
+physics engines. **HANDLING** (Soft-Body / Arcade / Hard Style / Race Style)
+changes steering and tires. **MOTION PHYS** (Original / Newton) changes
+stunt dynamics. The Newton option uses radial support on loops
+`N/m = v^2/R + g cos(theta)`: slow cars lose contact and **fall ballistically**
+without a scripted wreck, while fast cars stay attached. Arcade-model landing
+response uses a surface-normal impulse, preserving tangential momentum on
+slopes. Soft-Body already has its own full node-and-spring ground contacts.
+Normal driving and the original option retain their previous behavior.
+
+This is **our new Newton-inspired physics implementation**, not an exact
+copy of the original Race Drivin' physics routines. The supplied 1993 US
+Sega Genesis Race Drivin' ROM is verified and preserved; its 68000 code is
+not yet traced to the original Atari car dynamics. The supplied 32X Deluxe
+cartridge is also identified, but its additional courses await format
+analysis. See [Motion Physics and ROM validation](docs/NEWTON_MOTION_AND_ROM_INPUTS.md).
