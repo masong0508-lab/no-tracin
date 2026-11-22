@@ -45,6 +45,11 @@ enum {
 };
 extern s32 car_physics_profile;
 
+// Vertical motion/stunt dynamics independent of steering or tyre handling.
+// NEWTON is a new GBA-native model, not copied from Atari cartridge code.
+enum { CAR_MOTION_ORIGINAL, CAR_MOTION_NEWTON, CAR_MOTION_COUNT };
+extern s32 car_motion_profile;
+
 // Tunables the options menu changes.
 extern s32 car_g, car_grip, car_power, car_crashes;
 extern s32 cheat_fly, cheat_hop, cheat_glitch;

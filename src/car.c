@@ -30,6 +30,7 @@ s32 cheat_fly, cheat_hop, cheat_glitch;
 // Selectable, bounded GBA-native approximations of classic driving behavior.
 // No Atari arcade physics source ROM or machine code has been imported.
 s32 car_physics_profile;
+s32 car_motion_profile;
 
 static u32 rng = 12345;
 static s32 rnd(s32 n) { rng = rng * 1103515245 + 12345; return (rng >> 16) % n; }
@@ -538,17 +539,38 @@ move:;
     }
     c->y = hg;
     c->landed = impact;
-    c->vx -= (c->vx * impact) >> 13;
-    c->vz -= (c->vz * impact) >> 13;
     c->bob_v -= impact / 2;
     c->pitch_v -= impact / 2;
-    if (impact > 700) {
-        c->vy = surf_vy + impact / 4;   // bounce
-        c->y = hg + 256;
-        return;
+    if (car_motion_profile == CAR_MOTION_NEWTON) {
+        // Touchdown impulse along the surface normal (-gx,256,-gz), not
+        // a scripted horizontal slowdown. Elasticity is 0.25 on hard
+        // landings. It runs only on touchdown, not every physics frame.
+        if (impact > 0) {
+            s32 norm2 = gx * gx + 256 * 256 + gz * gz;
+            s32 restitution = impact > 700 ? 64 : 0;
+            s32 dy = (s32)(((long long)impact * (256 + restitution) * 256) / norm2);
+            c->vx -= (s32)(((long long)dy * gx) / 256);
+            c->vz -= (s32)(((long long)dy * gz) / 256);
+            c->vy += dy;
+        }
+        if (impact > 700) {
+            c->y += 256;
+            return;
+        }
+        c->vy = (c->vx * gx + c->vz * gz) / 256;
+        c->mode = CAR_GROUND;
+    } else {
+        // Original landing behavior remains unchanged when selected.
+        c->vx -= (c->vx * impact) >> 13;
+        c->vz -= (c->vz * impact) >> 13;
+        if (impact > 700) {
+            c->vy = surf_vy + impact / 4;
+            c->y = hg + 256;
+            return;
+        }
+        c->vy = surf_vy;
+        c->mode = CAR_GROUND;
     }
-    c->vy = surf_vy;
-    c->mode = CAR_GROUND;
     c->event_c = (iabs(c->trick_p) + 65536) >> 18;    // whole turns, 3/4 counts
     c->event_d = (iabs(c->trick_r) + 65536) >> 18;
     c->event_e = (iabs(c->trick_h) + 16384) >> 16;
@@ -610,11 +632,19 @@ static void loop_step(Car *c, u16 keys)
     c->roll = 0;
     c->bob = 0;
 
-    // The track can only push, not pull: too slow near the top and you fall.
-    s32 normal = (v * v) / (l->radius << 8) + ((G * icos(theta)) >> 14);
+    // Newton's radial support condition: N/m = v^2/R + g*cos(theta).
+    // A negative value would require the track to pull the car inward.
+    s32 bounded = v > 12000 ? 12000 : v < -12000 ? -12000 : v;
+    s32 normal = (bounded * bounded) / (l->radius * 256) + ((G * icos(theta)) >> 14);
     if (normal < 0) {
-        crash(c, EV_FELL);
-        c->vy -= 400;   // undo the upward throw: the car drops off
+        if (car_motion_profile == CAR_MOTION_NEWTON) {
+            // Ballistic flight at the exact contact point, carrying the
+            // loop tangent velocity with no artificial downward impulse.
+            take_off(c);
+        } else {
+            crash(c, EV_FELL);
+            c->vy -= 400; // unchanged original arcade fall
+        }
     }
 }
 
