@@ -1,8 +1,8 @@
 """Host checks for stock/optional race saves; no ROM, emulator or ARM SDK.
 
 Run with: python3 -m unittest discover -s tests -p 'test_*.py'
-HOST_CC may name a host C compiler. Only the SRAM address in a temporary copy
-of menu.c is redirected; production headers and sources remain unchanged.
+HOST_CC may name a host C compiler. Temporary copies redirect menu.c's SRAM
+address and omit gba.h's ARM target attribute; production files stay unchanged.
 """
 
 import os
@@ -30,12 +30,21 @@ class CourseRecordsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory(prefix="notracin-records-") as directory:
             work = Path(directory)
+            gba_header = (ROOT / "src/gba.h").read_text()
+            arm_target = 'target("arm"), '
+            self.assertEqual(gba_header.count(arm_target), 1,
+                             "Update the host header fixture for the new ARM attribute")
+            host_header = work / "gba_host.h"
+            host_header.write_text(gba_header.replace(arm_target, ""))
             menu_host = work / "menu_host.c"
             menu_host.write_text(host_source)
             binary = work / "course_records"
             command = compiler + [
                 "-std=c99", "-O2", "-ffunction-sections", "-fdata-sections",
-                "-Wno-pointer-to-int-cast", "-D__attribute__(x)=",
+                "-Wno-pointer-to-int-cast",
+                # Pre-include the scoped copy; GBA_H guards later project includes.
+                # Keep libc's attributes intact, including fortified inline wrappers.
+                "-include", str(host_header),
                 "-I", str(ROOT / "src"), "-Wl,--gc-sections",
             ]
             if optional:

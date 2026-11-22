@@ -42,6 +42,12 @@ def run_host_runtime(fixture, harness):
         raise unittest.SkipTest("Host C compiler not available (set HOST_CC)")
     with tempfile.TemporaryDirectory(prefix="notracin-vr-terrain-") as directory:
         work = Path(directory)
+        gba_header = (ROOT / "src/gba.h").read_text()
+        arm_target = 'target("arm"), '
+        if gba_header.count(arm_target) != 1:
+            raise AssertionError("Update the host header fixture for the new ARM attribute")
+        host_header = work / "gba_host.h"
+        host_header.write_text(gba_header.replace(arm_target, ""))
         # Copy source only so its local include resolves to this synthetic header.
         source = work / "vr_original.c"
         source.write_text(RUNTIME_SOURCE.read_text())
@@ -49,8 +55,10 @@ def run_host_runtime(fixture, harness):
         main = work / "main.c"
         main.write_text(harness)
         binary = work / "terrain_check"
+        # GBA_H makes this scoped pre-include replace subsequent project headers.
+        # Do not redefine __attribute__: fortified libc needs its inline attributes.
         command = compiler + ["-std=c99", "-O2", "-ffunction-sections", "-fdata-sections",
-                              "-D__attribute__(x)=", "-I", str(ROOT / "src"),
+                              "-include", str(host_header), "-I", str(ROOT / "src"),
                               "-Wl,--gc-sections", str(source), str(main),
                               str(ROOT / "src/render.c"), "-o", str(binary)]
         compiled = subprocess.run(command, capture_output=True, text=True, timeout=30)
