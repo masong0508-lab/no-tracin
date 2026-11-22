@@ -30,6 +30,13 @@ jobs:
           RACE=$(arm-none-eabi-nm -g build/notracin.elf | awk '$3=="g_race" {print $1}')
           test -n "$DRAW" && test -n "$RACE"
           build/gba_emulator_smoke notracin.gba "$DRAW" "$RACE" build/emulator-smoke | tee build/emulator-smoke/results.jsonl
+          OPT=$(arm-none-eabi-nm -g build/notracin.elf | awk '$3=="g_opt" {print $1}')
+          MODEL=$(arm-none-eabi-nm -g build/notracin.elf | awk '$3=="car_physics_profile" {print $1}')
+          test -n "$OPT" && test -n "$MODEL"
+          for MODE in 2 3; do
+            mkdir -p "build/emulator-smoke/physics-$MODE"
+            build/gba_emulator_smoke notracin.gba "$DRAW" "$RACE" "build/emulator-smoke/physics-$MODE" 0 0 "$MODE" "$OPT" "$MODEL" | tee "build/emulator-smoke/physics-$MODE/results.jsonl"
+          done
       - name: Publish real emulator captures and telemetry
         if: always()
         uses: actions/upload-artifact@v4

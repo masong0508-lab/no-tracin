@@ -10,6 +10,9 @@
 #include <stdarg.h>
 
 #define KEY_A 1
+#define KEY_B 2
+#define KEY_UP 64
+#define KEY_DOWN 128
 #define KEY_START 8
 #define KEY_RIGHT 16
 #define KEY_L 512
@@ -34,6 +37,8 @@ static void run(unsigned frames, unsigned keys)
 }
 
 static uint32_t read32(uint32_t address) { return core->busRead32(core, address); }
+static unsigned read8(uint32_t address) { return core->busRead8(core, address); }
+static void tap(unsigned key) { run(12, key); run(30, 0); }
 
 static unsigned long long pixel_hash(void)
 {
@@ -72,15 +77,19 @@ static void status(const char *phase, uint32_t frame_addr, uint32_t race_addr)
 
 int main(int argc, char **argv)
 {
-    if (argc != 5 && argc != 7) {
+    if (argc != 5 && argc != 7 && argc != 10) {
         fprintf(stderr, "usage: %s game.gba g_frames_hex g_race_hex screenshots_dir\n", argv[0]);
         return 2;
     }
     uint32_t frame_addr = strtoul(argv[2], NULL, 16);
     uint32_t race_addr = strtoul(argv[3], NULL, 16);
     if (!frame_addr || !race_addr) return 2;
-    int original = argc == 7 ? atoi(argv[5]) : 0;
-    int course_index = argc == 7 ? atoi(argv[6]) : 0;
+    int original = argc >= 7 ? atoi(argv[5]) : 0;
+    int course_index = argc >= 7 ? atoi(argv[6]) : 0;
+    int physics = argc == 10 ? atoi(argv[7]) : -1;
+    uint32_t options_addr = argc == 10 ? strtoul(argv[8], NULL, 16) : 0;
+    uint32_t model_addr = argc == 10 ? strtoul(argv[9], NULL, 16) : 0;
+    if (physics >= 0 && (physics >= 4 || !options_addr || !model_addr)) return 2;
     if ((original != 0 && original != 1) || course_index < 0 || course_index >= 3) return 2;
     struct mLogger logger = {.log = on_log, .filter = NULL};
     mLogSetDefaultLogger(&logger);
@@ -104,6 +113,25 @@ int main(int argc, char **argv)
 
     run(12, KEY_START); run(60, 0);
     shot(argv[4], "mode"); status("mode", frame_addr, race_addr);
+    if (physics >= 0) {
+        // The mode menu starts on ARCADE. Navigate by buttons to OPTIONS
+        // (index 5), then to the existing PHYSICS row (index 1).
+        for (int i = 0; i < 5; ++i) tap(KEY_DOWN);
+        tap(KEY_A); run(60, 0);
+        tap(KEY_DOWN);
+        for (int i = 0; i < physics; ++i) tap(KEY_RIGHT);
+        shot(argv[4], "physics_options");
+        unsigned saved = read8(options_addr + 14); // OPT_PHYSICS is slot 14.
+        int active = (int32_t)read32(model_addr);
+        if (saved != (unsigned)physics || active != physics) {
+            fprintf(stderr, "Physics option wrong: wanted %d, saved=%u, live=%d\n",
+                    physics, saved, active);
+            return 1;
+        }
+        printf("PASS: controller-selected physics mode %d (SRAM option + live solver)\n", physics);
+        tap(KEY_B); run(40, 0);
+        for (int i = 0; i < 5; ++i) tap(KEY_UP);
+    }
     run(12, KEY_A); run(80, 0);
     if (original) { run(12, KEY_L); run(30, 0); }
     for (int i = 0; i < course_index; i++) { run(12, KEY_RIGHT); run(30, 0); }
@@ -116,6 +144,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (physics >= 0 && (int32_t)read32(model_addr) != physics) {
+        fprintf(stderr, "Course loading changed selected physics mode\n");
+        return 1;
+    }
     unsigned before_draw = read32(frame_addr);
     int32_t before_progress = (int32_t)read32(race_addr + 12);
     run(760, KEY_A);
