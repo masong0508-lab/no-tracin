@@ -186,7 +186,7 @@ static void normalize(s32 *v)
     u32 l2 = (u32)(v[0] * v[0]) + (u32)(v[1] * v[1]) + (u32)(v[2] * v[2]);
     s32 l = isqrt(l2);
     if (!l) { v[0] = 0; v[1] = 0; v[2] = 16384; return; }
-    for (s32 k = 0; k < 3; k++) v[k] = (v[k] << 14) / l;
+    for (s32 k = 0; k < 3; k++) v[k] = (v[k] * 16384) / l;
 }
 
 static inline s32 dot14(const s32 *a, const s32 *b)
@@ -336,7 +336,7 @@ static void spawn_angles(Car *c)
 void sb_reset(Car *c)
 {
     // The frame's axes at rest, measured in car axes.
-    for (s32 i = 0; i < NF; i++) { nd[i].x = rest[i][0] << 8; nd[i].y = rest[i][1] << 8; nd[i].z = rest[i][2] << 8; }
+    for (s32 i = 0; i < NF; i++) { nd[i].x = rest[i][0] * 256; nd[i].y = rest[i][1] * 256; nd[i].z = rest[i][2] * 256; }
     for (s32 j = 0; j < 3; j++)
         for (s32 k = 0; k < 3; k++) corr[j][k] = j == k ? 16384 : 0;
     frame();
@@ -351,7 +351,7 @@ void sb_reset(Car *c)
     s32 aligned = original_spawn_axes(c, ax_r, ax_u, ax_f);
 #endif
     for (s32 i = 0; i < NN; i++) {
-        s32 lx = rest[i][0] << 8, ly = rest[i][1] << 8, lz = rest[i][2] << 8;
+        s32 lx = rest[i][0] * 256, ly = rest[i][1] * 256, lz = rest[i][2] * 256;
         Node *n = &nd[i];
 #ifdef WITH_VR_ORIGINAL_TRACKS
         if (aligned) {
@@ -382,10 +382,10 @@ void sb_reset(Car *c)
     s32 *cl = cl_rest;
     cl[0] = cl[1] = cl[2] = 0;
     for (s32 i = 0; i < NF; i++)
-        for (s32 k = 0; k < 3; k++) cl[k] += rest[i][k] << 8;
+        for (s32 k = 0; k < 3; k++) cl[k] += rest[i][k] * 256;
     for (s32 k = 0; k < 3; k++) cl[k] >>= 4;
     for (s32 w = 0; w < 4; w++)
-        for (s32 k = 0; k < 3; k++) hub_loc[w][k] = (rest[HUB0 + w][k] << 8) - cl[k];
+        for (s32 k = 0; k < 3; k++) hub_loc[w][k] = (rest[HUB0 + w][k] * 256) - cl[k];
     s32 ix = 0, iy = 0, iz = 0;
     for (s32 i = 0; i < NN; i++) {
         s32 m = i >= HUB0 ? HUB_M : 1;
@@ -648,7 +648,7 @@ s32 sb_push(s32 x, s32 y, s32 z, s32 radius, s32 vx, s32 vz, s32 *push_x, s32 *p
         if (d2 >= r * r) continue;
         s32 d = isqrt(d2);
         if (!d) { dx = 1; d = 1; }
-        add_contact(i, (r - d) << 8, (dx << 14) / d, 0, (dz << 14) / d);
+        add_contact(i, (r - d) << 8, (dx * 16384) / d, 0, (dz * 16384) / d);
     }
     if (!ncon) return 0;
     s32 v0x = mean_vx(), v0z = mean_vz();
@@ -769,7 +769,7 @@ s32 sb_hit_prop(s32 *pos, s32 *vel, s32 radius, s32 half_h, s32 mass)
         s32 pen = (reach - l) << 4;
         if (pen <= best || !l) continue;
         best = pen; ba = bb = HUB0 + w; bt = 0;
-        bn[0] = (ex << 14) / l; bn[1] = (ey << 14) / l; bn[2] = (ez << 14) / l;
+        bn[0] = (ex * 16384) / l; bn[1] = (ey * 16384) / l; bn[2] = (ez * 16384) / l;
         for (s32 k = 0; k < 3; k++) bc[k] = (&h->x)[k] + ((bn[k] * WHEEL_R) >> 6);
     }
     if (ba < 0) return 0;
@@ -1166,7 +1166,7 @@ void sb_step(Car *c, u16 keys)
             // On a circuit the road bends and climbs: heights come from the
             // stretch under the car and its neighbours.
             TrackHit th;
-            if (track_find(gp_x, gp_z, &th)) gp_seg = th.seg;
+            if (track_find_road(gp_x, gp_z, &th)) gp_seg = th.seg;
             gp_ok = 1;
         } else {
             gp_ok = world_ground_plane(gp_x, gp_z, GP_R + 16, &gp_h, &gp_gx, &gp_gz);
@@ -1233,7 +1233,7 @@ void sb_step(Car *c, u16 keys)
                         // The face of a step or a ramp: back the way it came.
                         s32 vx = n->x - n->px, vz = n->z - n->pz;
                         s32 l = isqrt((u32)(vx * vx) + (u32)(vz * vz));
-                        if (l > 0) add_contact(i, l, -(vx << 14) / l, 0, -(vz << 14) / l);
+                        if (l > 0) add_contact(i, l, -(vx * 16384) / l, 0, -(vz * 16384) / l);
                     } else {
                         add_contact(i, gh - n->y, 0, 16384, 0);
                     }
@@ -1301,10 +1301,10 @@ void sb_step(Car *c, u16 keys)
     c->vy = mv[1];
     c->vz = mv[2];
     s32 hlen = isqrt((u32)(ax_f[0] * ax_f[0]) + (u32)(ax_f[2] * ax_f[2]));
-    s32 hd = iatan2(ax_f[0], ax_f[2]) << 6;
+    s32 hd = iatan2(ax_f[0], ax_f[2]) * 64;
     c->heading += (s16)(hd - c->heading);
-    c->pitch = iatan2(ax_f[1], hlen) << 8;
-    c->roll = iatan2(-ax_r[1], ax_u[1]) << 8;
+    c->pitch = iatan2(ax_f[1], hlen) * 256;
+    c->roll = iatan2(-ax_r[1], ax_u[1]) * 256;
     c->bob = 0;
     c->throttle = (keys & KEY_A) != 0;
     c->hit = hit;

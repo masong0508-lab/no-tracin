@@ -227,7 +227,7 @@ void race_begin(s32 track, s32 mode, Car *player)
     for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
         grid_slot(i, &d, &lat);
-        r->s = d << 8;
+        r->s = d * 256;
         r->v = 0;
         r->lat = r->lat_target = lat;
         // The front of the grid is quicker; it spreads the field out.
@@ -299,7 +299,7 @@ static void rivals_step(Car *player, s32 started, s32 road_d, s32 plat)
             for (s32 k = -1; k < RIVALS && ((g_race.total_steps + i) & 3) == 0; k++) {
                 if (k == i) continue;
                 s32 os, olat, ov;
-                if (k < 0) { os = road_d << 8; olat = plat; ov = pspeed; }
+                if (k < 0) { os = road_d * 256; olat = plat; ov = pspeed; }
                 else { os = rivals[k].s; olat = rivals[k].lat; ov = rivals[k].v; }
                 s32 ahead = traffic_gap((os - r->s) >> 8);
                 if (ahead <= 0 || ahead > 150 || iabs(olat - r->lat) > 56) continue;
@@ -356,7 +356,7 @@ static void rivals_step(Car *player, s32 started, s32 road_d, s32 plat)
         s32 dist = isqrt(dx * dx + dz * dz);
         if (dist >= 54 || player->mode == CAR_CRASH) continue;
         if (!dist) { dx = 1; dist = 1; }
-        s32 nx = (dx << 14) / dist, nz = (dz << 14) / dist;
+        s32 nx = (dx * 16384) / dist, nz = (dz * 16384) / dist;
         s32 pen = 54 - dist;
         player->x += (pen * nx) >> 6;
         player->z += (pen * nz) >> 6;
@@ -399,7 +399,7 @@ void race_step(Car *player, s32 started)
         for (s32 i = 0; i < RIVALS; i++) rival_before[i] = rivals[i].s;
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
-    s32 found = track_find(x, z, &hit);
+    s32 found = track_find_road(x, z, &hit);
     // Ignored projection jumps can offset credit from the actual location.
     // Traffic uses the current projection, or the last one if off the road.
     s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;

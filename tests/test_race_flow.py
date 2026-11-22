@@ -31,7 +31,7 @@ class RaceFlowTests(unittest.TestCase):
             binary = work / "race_flow"
             command = compiler + [
                 "-std=c99", "-O2", "-ffunction-sections", "-fdata-sections",
-                "-Wno-pointer-to-int-cast", "-include", str(header),
+                "-Wno-pointer-to-int-cast", "-fsanitize=shift", "-fno-sanitize-recover=shift", "-include", str(header),
                 "-I", str(ROOT / "src"), "-Wl,--gc-sections",
                 str(ROOT / "tests" / ("race_finish_host.c" if real_finish else "race_flow_host.c")),
                 *[str(ROOT / "src" / name) for name in

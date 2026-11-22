@@ -23,7 +23,7 @@ class SoftbodyLimitsTests(unittest.TestCase):
                 "-std=c99","-O2","-ffunction-sections","-fdata-sections",
                 "-Wno-pointer-to-int-cast","-include",str(header),
                 "-I",str(ROOT/"src"),"-Wl,--gc-sections",
-                "-fsanitize=signed-integer-overflow,integer-divide-by-zero",
+                "-fsanitize=shift,signed-integer-overflow,integer-divide-by-zero",
                 str(ROOT/"tests/softbody_limits_host.c"),
                 str(ROOT/"src/car.c"),str(ROOT/"src/render.c"),str(ROOT/"src/tune.c"),
                 "-o",str(binary),

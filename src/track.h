@@ -68,6 +68,9 @@ typedef struct {
     s32 h;          // road height there, Q8
 } TrackHit;
 s32  track_find(s32 x, s32 z, TrackHit *hit);
+// The four route fields match track_find(), but hit->h is zero instead of
+// elevation. Use this for physics paths that need no height lookup.
+s32  track_find_road(s32 x, s32 z, TrackHit *hit);
 
 extern s16 track_pitch[];               // slope of each stretch (1024-unit angle)
 void track_load(s32 index);            // -1 goes back to the city

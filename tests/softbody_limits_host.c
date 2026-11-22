@@ -24,6 +24,8 @@ s32 world_ground_plane(s32 x,s32 z,s32 radius,s32 *h,s32 *gx,s32 *gz)
 { (void)x;(void)z;(void)radius;*h=*gx=*gz=0;return 1; }
 s32 track_find(s32 x,s32 z,TrackHit *hit)
 { (void)x;(void)z;*hit=(TrackHit){0};return 1; }
+// Artificial track fixture: route-only lookup shares its known geometry.
+s32 track_find_road(s32 x, s32 z, TrackHit *hit) { return track_find(x, z, hit); }
 s32 track_height_near(s32 segment,s32 x,s32 z)
 { (void)segment;(void)x;(void)z;return 0; }
 void track_gradient(s32 x,s32 z,s32 *gx,s32 *gz)

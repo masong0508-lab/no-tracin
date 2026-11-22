@@ -96,7 +96,9 @@ static inline s32 barrier(const TrackPt *p)
     return track_half_width(p - g_track->pts) + p->verge;
 }
 
-s32 track_find(s32 x, s32 z, TrackHit *hit)
+// Race progress, traffic and surfaces need the nearest road, not height.
+// Avoid the original-course height-plane division on those hot paths.
+s32 track_find_road(s32 x, s32 z, TrackHit *hit)
 {
     const TrackDef *t = g_track;
     if (x < 0 || z < 0 || x >= TRACK_WORLD || z >= TRACK_WORLD) return 0;
@@ -115,17 +117,28 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
         s32 d = cx * cx + cz * cz;
         if (d < best) { best = d; bi = list[k]; bt = a; bcx = cx; bcz = cz; }
     }
-    const TrackPt *p = &t->pts[bi], *q = &t->pts[bi + 1 == t->count ? 0 : bi + 1];
+    const TrackPt *p = &t->pts[bi];
     hit->seg = bi;
     hit->along = bt;
     hit->dist = isqrt(best);
     hit->lat = (bcx * p->uz - bcz * p->ux) >= 0 ? hit->dist : -hit->dist;
-    hit->h = (p->y << 8) + (((q->y - p->y) << 8) * bt) / (p->len ? p->len : 1);
+    hit->h = 0; // Unused by this projection-only API.
+    return 1;
+}
+
+s32 track_find(s32 x, s32 z, TrackHit *hit)
+{
+    if (!track_find_road(x, z, hit)) return 0;
+    const TrackDef *t = g_track;
+    const TrackPt *p = &t->pts[hit->seg];
+    const TrackPt *q = &t->pts[hit->seg + 1 == t->count ? 0 : hit->seg + 1];
+    // Preserve signed truncation without shifting a negative elevation.
+    hit->h = p->y * 256 + (s32)((((long long)q->y - p->y) * 256 * hit->along)
+                                / (p->len ? p->len : 1));
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) hit->h = vr_original_height(original, x, z);
 #endif
-    (void)bcz;
     return 1;
 }
 
@@ -156,10 +169,10 @@ void track_gradient(s32 x, s32 z, s32 *gx, s32 *gz)
 #endif
     TrackHit h;
     *gx = *gz = 0;
-    if (!track_find(x, z, &h)) return;
+    if (!track_find_road(x, z, &h)) return;
     const TrackPt *p = &g_track->pts[h.seg], *q = &g_track->pts[h.seg + 1 == g_track->count ? 0 : h.seg + 1];
     if (h.dist > barrier(p)) return;
-    s32 g = ((q->y - p->y) << 8) / (p->len ? p->len : 1);   // rise per unit, Q8
+    s32 g = ((q->y - p->y) * 256) / (p->len ? p->len : 1);   // rise per unit, Q8
     *gx = (g * p->ux) >> 14;
     *gz = (g * p->uz) >> 14;
 }
@@ -175,7 +188,7 @@ s32 track_ground_plane(s32 x, s32 z, s32 r, s32 *h0, s32 *gx, s32 *gz)
     if (!track_find(x, z, &h)) return 0;
     const TrackPt *p = &g_track->pts[h.seg], *q = &g_track->pts[h.seg + 1 == g_track->count ? 0 : h.seg + 1];
     if (h.dist + r > barrier(p)) return 0;
-    s32 g = ((q->y - p->y) << 8) / (p->len ? p->len : 1);
+    s32 g = ((q->y - p->y) * 256) / (p->len ? p->len : 1);
     *h0 = h.h;
     *gx = (g * p->ux) >> 14;
     *gz = (g * p->uz) >> 14;
@@ -208,7 +221,7 @@ s32 track_height_near(s32 seg, s32 x, s32 z)
     const TrackPt *p = &t->pts[bi], *q = &t->pts[bi + 1 == t->count ? 0 : bi + 1];
     s32 edge = barrier(p);
     if (best > edge * edge) return track_height(x, z);
-    return (p->y << 8) + (((q->y - p->y) * ba * inv_len[bi]) >> 8);
+    return (p->y * 256) + (((q->y - p->y) * ba * inv_len[bi]) >> 8);
 }
 
 s32 track_surface(s32 x, s32 z)
@@ -218,7 +231,7 @@ s32 track_surface(s32 x, s32 z)
     if (original >= 0) return vr_original_surface(original, x, z);
 #endif
     TrackHit h;
-    if (!track_find(x, z, &h)) return SURF_GRASS;
+    if (!track_find_road(x, z, &h)) return SURF_GRASS;
     return h.dist < track_half_width(h.seg) ? SURF_ROAD : SURF_GRASS;
 }
 
@@ -230,7 +243,7 @@ s32 track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
 #endif
     TrackHit h;
     *nx = 0; *nz = 0;
-    if (!track_find(x, z, &h)) return 0;
+    if (!track_find_road(x, z, &h)) return 0;
     const TrackPt *p = &g_track->pts[h.seg];
     s32 edge = barrier(p) - 4;
     s32 pen = h.dist + radius - edge;
@@ -238,8 +251,8 @@ s32 track_collide(s32 x, s32 z, s32 radius, s32 *nx, s32 *nz)
     // Push back toward the centreline.
     s32 cx = x - (p->x + ((p->ux * h.along) >> 14));
     s32 cz = z - (p->z + ((p->uz * h.along) >> 14));
-    *nx = -(cx << 14) / h.dist;
-    *nz = -(cz << 14) / h.dist;
+    *nx = -(cx * 16384) / h.dist;
+    *nz = -(cz * 16384) / h.dist;
     return pen;
 }
 
@@ -267,7 +280,7 @@ void track_point(s32 d, s32 lat, s32 *x, s32 *z, s32 *y, s32 *heading, s32 *hint
     s32 rz = nrz[i] + (((nrz[ni] - nrz[i]) * f) >> 16);
     *x = p->x + ((p->ux * a) >> 14) + ((rx * lat) >> 14);
     *z = p->z + ((p->uz * a) >> 14) + ((rz * lat) >> 14);
-    *y = (p->y << 8) + (((q->y - p->y) * f) >> 8);
+    *y = (p->y * 256) + (((q->y - p->y) * f) >> 8);
 #ifdef WITH_VR_ORIGINAL_TRACKS
     s32 original = original_course();
     if (original >= 0) *y = vr_original_height(original, *x, *z);
@@ -290,8 +303,8 @@ void track_load(s32 index)
         s32 x = a->uz + b->uz, z = -a->ux - b->ux;
         s32 l = isqrt(x * x + z * z);
         if (!l) { x = b->uz; z = -b->ux; l = 16384; }
-        nrx[i] = (x << 14) / l;
-        nrz[i] = (z << 14) / l;
+        nrx[i] = (x * 16384) / l;
+        nrz[i] = (z * 16384) / l;
         tower_at[i] = 0;
         inv_len[i] = 65535 / (b->len ? b->len : 1);
         const TrackPt *c = &t->pts[i + 1 == t->count ? 0 : i + 1];

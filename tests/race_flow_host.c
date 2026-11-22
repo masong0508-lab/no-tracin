@@ -34,6 +34,8 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
     *hit = (TrackHit){.along = d, .lat = lat, .dist = lat < 0 ? -lat : lat};
     return 1;
 }
+// Artificial track fixture: route-only lookup shares its known geometry.
+s32 track_find_road(s32 x, s32 z, TrackHit *hit) { return track_find(x, z, hit); }
 s32 track_half_width(s32 segment) { (void)segment; return 150; }
 s32 track_height(s32 x, s32 z) { (void)x; (void)z; return 0; }
 s32 track_height_near(s32 segment, s32 x, s32 z)

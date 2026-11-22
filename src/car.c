@@ -80,8 +80,8 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
 {
     u8 *p = (u8 *)c;
     for (u32 i = 0; i < sizeof(*c); i++) p[i] = 0;
-    c->x = x << 8;
-    c->z = z << 8;
+    c->x = x * 256;
+    c->z = z * 256;
     c->y = world_height(x, z);
     if (c->y < 0) c->y = 0;
     c->heading = heading;
@@ -272,8 +272,8 @@ static void ground_step(Car *c, u16 keys)
     // Body pitch and roll: the slope underneath plus squat, dive and lean.
     s32 sf = (gx * fx + gz * fz) >> 14, sr = (gx * fz - gz * fx) >> 14;
     s32 a_lat = (vlong * yaw) / 10430;
-    spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) << 8) + engine * 48);
-    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) << 8) - a_lat * tn.lean);
+    spring(&c->pitch, &c->pitch_v, (iatan2(sf, 256) * 256) + engine * 48);
+    spring(&c->roll, &c->roll_v, (-iatan2(sr, 256) * 256) - a_lat * tn.lean);
 
     // Move, then resolve walls.
     s32 nx = c->x + c->vx, nz = c->z + c->vz;
@@ -419,7 +419,7 @@ move:;
     s32 h = c->heading >> 6;
     s32 fx = isin(h), fz = icos(h);
     s32 fwd = (c->vx * fx + c->vz * fz) >> 14;
-    s32 path = iatan2(c->vy, fwd < 64 ? 64 : fwd) << 8;
+    s32 path = iatan2(c->vy, fwd < 64 ? 64 : fwd) * 256;
     if (!tricking && !cheat_fly) {
         c->pitch += wrap_angle(path - c->pitch) / 16;
         c->roll -= wrap_angle(c->roll) / 16;
@@ -519,7 +519,7 @@ static void loop_step(Car *c, u16 keys)
     c->vx = (v * l->shift * 256) / len;
     c->vz = (v * icos(theta)) >> 14;
     c->vy = (v * isin(theta)) >> 14;
-    c->pitch = theta << 8;
+    c->pitch = theta * 256;
     c->roll = 0;
     c->bob = 0;
 
@@ -550,8 +550,8 @@ static void crash_step(Car *c)
     collide(c, &nx, &nz, 0);
     c->x = nx; c->z = nz;
     c->y += c->vy;
-    c->pitch += c->spin_p << 8;
-    c->roll += c->spin_r << 8;
+    c->pitch += c->spin_p * 256;
+    c->roll += c->spin_r * 256;
     c->heading += c->spin_h;
 
     s32 hg = world_height(nx >> 8, nz >> 8);
