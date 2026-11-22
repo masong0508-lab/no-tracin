@@ -280,3 +280,19 @@ Sega Genesis Race Drivin' ROM is verified and preserved; its 68000 code is
 not yet traced to the original Atari car dynamics. The supplied 32X Deluxe
 cartridge is also identified, but its additional courses await format
 analysis. See [Motion Physics and ROM validation](docs/NEWTON_MOTION_AND_ROM_INPUTS.md).
+
+### 32X and Race Drivin' ROM tracing: verified first-stage data
+
+The user-supplied US Virtua Racing Deluxe 32X cartridge now has an audited
+**six-slot normal plus one-slot alternate** 68000 route-index table: 28,672
+validated lookup addresses, with source-offset and endian checks in
+`tools/inspect_vrd_32x_tables.py`. This is *not yet* a five-course 3D
+geometry importer, and the table slots are not labeled as tracks without
+runtime verification. The verified Race Drivin' Genesis image can be
+inspected with `tools/trace_racedrivin_genesis.py` to inventory tentative
+68000 math/call sites; no original Atari physics routine is claimed yet.
+
+The independently selectable **Motion Physics: Newton** now also conserves
+the loop's lateral tangent velocity and residual movement on both forward
+completion and backward exit. It keeps the prior behavior for **Original**
+motion. See [ROM tracing and Newton validation](docs/ROM_TRACING_AND_LOOP_MOMENTUM_20261122.md).
