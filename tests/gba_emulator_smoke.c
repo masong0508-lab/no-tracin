@@ -1,3 +1,4 @@
+#define _GNU_SOURCE 1
 /* Real mGBA ARM core smoke test: buttons only; no test-state injection. */
 #include <mgba/flags.h>
 #include <mgba/core/core.h>
