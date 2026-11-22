@@ -188,7 +188,7 @@ static inline __attribute__((always_inline)) s32 edge_slope(s32 dx, s32 dy)
 {
     if (dy < 1024)
         return (s32)(((long long)dx * inv_dy[dy]) >> (16 - SUB));
-    return (dx << SUB) / dy;
+    return (dx * (1 << SUB)) / dy;
 }
 
 // Blend (r, g, b) t/32 of the way toward (hr, hg, hb).
@@ -480,7 +480,7 @@ IWRAM_CODE static void fill_poly(const s16 *sx, const s16 *sy, s32 n, u32 color)
         if (y0 >= y1) continue;
         s32 s = edge_slope(sx[j] - sx[i], y1 - y0);
         s32 y = y0 < 0 ? 0 : y0, yend = y1 > SCREEN_H ? SCREEN_H : y1;
-        s32 x = (sx[i] << SUB) + s * (y - y0);
+        s32 x = sx[i] * (1 << SUB) + s * (y - y0);
         s16 *l = &lbuf[y];
         for (; y < yend; y++, x += s) *l++ = x >> SUB;
     }
@@ -492,7 +492,7 @@ IWRAM_CODE static void fill_poly(const s16 *sx, const s16 *sy, s32 n, u32 color)
         if (y0 >= y1) continue;
         s32 s = edge_slope(sx[i] - sx[j], y1 - y0);
         s32 y = y0 < 0 ? 0 : y0, yend = y1 > SCREEN_H ? SCREEN_H : y1;
-        s32 x = (sx[j] << SUB) + s * (y - y0);
+        s32 x = sx[j] * (1 << SUB) + s * (y - y0);
         const s16 *l = &lbuf[y];
         volatile u16 *row = target + y * (SCREEN_W / 2);
         for (; y < yend; y++, x += s, row += SCREEN_W / 2) {
@@ -523,7 +523,7 @@ IWRAM_CODE static s32 project_poly(const Vec3 *v, s32 n, s16 *sx, s16 *sy, s32 c
             s32 ain = a->z >= NEAR, bin = b->z >= NEAR;
             if (ain) clip[m++] = *a;
             if (ain != bin) {
-                s32 t = ((NEAR - a->z) << 12) / (b->z - a->z);
+                s32 t = ((NEAR - a->z) * (1 << 12)) / (b->z - a->z);
                 clip[m].x = a->x + (((b->x - a->x) * t) >> 12);
                 clip[m].y = a->y + (((b->y - a->y) * t) >> 12);
                 clip[m].z = NEAR;
