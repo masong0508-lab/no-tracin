@@ -67,6 +67,18 @@ s32 car_speed(const Car *car)
     speed_queries++;
     return isqrt(car->vx * car->vx + car->vz * car->vz);
 }
+// The traffic harness does not link car.c; only its safe initial pose is
+// needed here to exercise production race_begin, not car physics.
+void car_reset(Car *car, s32 x, s32 z, s32 heading)
+{
+    memset(car, 0, sizeof(*car));
+    car->x = x << 8;
+    car->z = z << 8;
+    car->heading = heading;
+    car->safe_x = x;
+    car->safe_z = z;
+    car->safe_heading = heading;
+}
 void car_respawn(Car *car) { (void)car; assert(0 && "Flat traffic fixture cannot respawn"); }
 void sound_play(s32 sound) { (void)sound; }
 void game_message(const char *a, const char *b, s32 palette, s32 steps)
