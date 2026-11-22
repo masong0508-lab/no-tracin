@@ -77,7 +77,7 @@ static void status(const char *phase, uint32_t frame_addr, uint32_t race_addr)
 
 int main(int argc, char **argv)
 {
-    if (argc != 5 && argc != 7 && argc != 10) {
+    if (argc != 5 && argc != 7 && argc != 10 && argc != 12) {
         fprintf(stderr, "usage: %s game.gba g_frames_hex g_race_hex screenshots_dir\n", argv[0]);
         return 2;
     }
@@ -86,10 +86,13 @@ int main(int argc, char **argv)
     if (!frame_addr || !race_addr) return 2;
     int original = argc >= 7 ? atoi(argv[5]) : 0;
     int course_index = argc >= 7 ? atoi(argv[6]) : 0;
-    int physics = argc == 10 ? atoi(argv[7]) : -1;
-    uint32_t options_addr = argc == 10 ? strtoul(argv[8], NULL, 16) : 0;
-    uint32_t model_addr = argc == 10 ? strtoul(argv[9], NULL, 16) : 0;
+    int physics = argc >= 10 ? atoi(argv[7]) : -1;
+    uint32_t options_addr = argc >= 10 ? strtoul(argv[8], NULL, 16) : 0;
+    uint32_t model_addr = argc >= 10 ? strtoul(argv[9], NULL, 16) : 0;
+    int motion = argc == 12 ? atoi(argv[10]) : -1;
+    uint32_t motion_addr = argc == 12 ? strtoul(argv[11], NULL, 16) : 0;
     if (physics >= 0 && (physics >= 4 || !options_addr || !model_addr)) return 2;
+    if (motion >= 0 && (motion >= 2 || !options_addr || !motion_addr)) return 2;
     if ((original != 0 && original != 1) || course_index < 0 || course_index >= 3) return 2;
     struct mLogger logger = {.log = on_log, .filter = NULL};
     mLogSetDefaultLogger(&logger);
@@ -113,23 +116,46 @@ int main(int argc, char **argv)
 
     run(12, KEY_START); run(60, 0);
     shot(argv[4], "mode"); status("mode", frame_addr, race_addr);
-    if (physics >= 0) {
-        // The mode menu starts on ARCADE. Navigate by buttons to OPTIONS
-        // (index 5), then to the existing PHYSICS row (index 1).
+    if (physics >= 0 || motion >= 0) {
+        // Title -> Arcade mode menu -> Options at index 5. Test physical
+        // settings through real buttons, without writing guest RAM.
         for (int i = 0; i < 5; ++i) tap(KEY_DOWN);
         tap(KEY_A); run(60, 0);
-        tap(KEY_DOWN);
-        for (int i = 0; i < physics; ++i) tap(KEY_RIGHT);
-        shot(argv[4], "physics_options");
-        unsigned saved = read8(options_addr + 14); // OPT_PHYSICS is slot 14.
-        int active = (int32_t)read32(model_addr);
-        if (saved != (unsigned)physics || active != physics) {
-            fprintf(stderr, "Physics option wrong: wanted %d, saved=%u, live=%d\n",
-                    physics, saved, active);
-            return 1;
+        if (physics >= 0) {
+            tap(KEY_DOWN); // First option: Handling.
+            for (int i = 0; i < physics; ++i) tap(KEY_RIGHT);
+            shot(argv[4], "handling_options");
+            unsigned selected = read8(options_addr + 14);
+            int live = (int32_t)read32(model_addr);
+            if (selected != (unsigned)physics || live != physics) {
+                fprintf(stderr, "Handling mismatch: expected %d got %u/%d\n", physics, selected, live);
+                return 1;
+            }
+            printf("PASS: independent handling profile %d\n", physics);
         }
-        printf("PASS: controller-selected physics mode %d (SRAM option + live solver)\n", physics);
+        if (motion >= 0) {
+            tap(KEY_DOWN); // Second option: Motion Physics.
+            if (physics < 0) tap(KEY_DOWN);
+            for (int i = 0; i < motion; ++i) tap(KEY_RIGHT);
+            shot(argv[4], "motion_options");
+            unsigned selected = read8(options_addr + 15);
+            int live = (int32_t)read32(motion_addr);
+            if (selected != (unsigned)motion || live != motion) {
+                fprintf(stderr, "Motion mismatch: expected %d got %u/%d\n", motion, selected, live);
+                return 1;
+            }
+            printf("PASS: independent motion physics %d\n", motion);
+        }
         tap(KEY_B); run(40, 0);
+        if (motion >= 0) {
+            // NTR2 SysSave: magic (4 bytes), options 0..15, unchanged size.
+            unsigned saved = read8(0x0E000013);
+            if (saved != (unsigned)motion) {
+                fprintf(stderr, "SRAM motion byte expected %d got %u\n", motion, saved);
+                return 1;
+            }
+            printf("PASS: independent motion saved in reserved SRAM option[15]\n");
+        }
         for (int i = 0; i < 5; ++i) tap(KEY_UP);
     }
     run(12, KEY_A); run(80, 0);
@@ -145,7 +171,11 @@ int main(int argc, char **argv)
     }
 
     if (physics >= 0 && (int32_t)read32(model_addr) != physics) {
-        fprintf(stderr, "Course loading changed selected physics mode\n");
+        fprintf(stderr, "Course loading changed handling mode\n");
+        return 1;
+    }
+    if (motion >= 0 && (int32_t)read32(motion_addr) != motion) {
+        fprintf(stderr, "Course loading changed motion physics\n");
         return 1;
     }
     unsigned before_draw = read32(frame_addr);
