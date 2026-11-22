@@ -329,3 +329,8 @@ not authentic, named Highland/Sand Park/etc. complete ports**. Standard and
 Genesis-only builds need no 32X data, scientific Python packages, heap or
 additional framebuffer. See
 [the 32X road-study implementation and test report](docs/32X_GBA_ROAD_STUDY_VALIDATION.md).
+
+The new five 32X studies also passed 10 additional real mGBA controller
+smoke tests with **Newton Motion** paired independently with **Arcade** and
+**Race Style** handling on all five slots. These do not establish original
+Sega 32X car physics or completed competitive races.

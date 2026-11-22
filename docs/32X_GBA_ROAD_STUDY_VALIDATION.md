@@ -37,3 +37,16 @@ Generated source-ROM-derived `vrd32x_study_data.h` and `vrd32x_study_tracks.h` r
 3. Verify 3D height scale, banked-road transitions, jumps and collision on all five slots using native physical measurements.
 4. Run complete laps and sustained high-speed steering/recovery on actual GBA hardware or a real emulator with varied controls.
 5. Trace the actual Race Drivin' Genesis 68000 gravity/tyre and suspension routines via execution (not opcode statistics) before any claim of porting authentic Atari/Race Drivin' physics.
+
+## Additional independent Newton × Handling emulator validation
+
+After the five default-motion study smokes, a separate real mGBA pass selected
+**Motion Physics: Newton** through the options menu, alongside **Handling:
+Arcade** and then **Handling: Race Style**, on each of the five new road-study
+slots. All **10 of 10** runs passed. For each run the emulator confirmed
+handling byte 14 and motion byte 15 in the existing SRAM/save option record,
+then entered the correct 32X study ID 6–10, advanced race-progress readouts
+relative to the staging path and continued rendering with zero emulator errors.
+The test changed actual controller states only, without altering guest state.
+This is a 760-frame smoke test, not validation of the original Sega racing
+routes or a full-length handling/physics stability benchmark.
