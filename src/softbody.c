@@ -1215,7 +1215,7 @@ void sb_step(Car *c, u16 keys)
     s32 hit = 0, land = hub_land, tilted = ax_u[1] < 12000;
     s32 nx, nz, gmax = -(1 << 30), lost = wheels_off;
     for (s32 w = 0; w < 4; w++) if (hub_gh[w] > gmax) gmax = hub_gh[w];
-    gmax += (3 - WHEEL_R) << 8;
+    gmax -= (WHEEL_R - 3) << 8;
     s32 reach = 48 + (speed >> 8);
     s32 near_wall = world_collide(cen[0] >> 8, cen[2] >> 8, reach, &nx, &nz) > 0;
     ncon = 0;
@@ -1365,7 +1365,7 @@ void sb_step(Car *c, u16 keys)
 
     // Into the water: it sinks, then the car comes back at the last safe spot.
     s32 cx = cen[0] >> 8, cz = cen[2] >> 8;
-    if (cen[1] < (-16 << 8) && world_in_water(cx, cz)) {
+    if (cen[1] < (-(16 << 8)) && world_in_water(cx, cz)) {
         if (!water_steps) { c->event = EV_SPLASH; sound_play(SFX_SPLASH); }
         for (s32 i = 0; i < NN; i++) {
             Node *n = &nd[i];

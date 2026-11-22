@@ -49,7 +49,7 @@ static s32 engine_force(s32 v)
 static s32 surf(s32 x, s32 z, s32 base)
 {
     s32 h = world_height(x, z);
-    return h < (-100 << 8) ? base : h;
+    return h < (-(100 << 8)) ? base : h;
 }
 
 // Slope from one-sided differences, taking the gentler side so the edge of
@@ -426,7 +426,7 @@ move:;
     }
 
     s32 ux = nx >> 8, uz = nz >> 8;
-    if (c->y < (-16 << 8) && world_in_water(ux, uz)) {
+    if (c->y < (-(16 << 8)) && world_in_water(ux, uz)) {
         crash(c, EV_SPLASH);
         return;
     }
@@ -535,12 +535,12 @@ static void crash_step(Car *c)
 {
     c->timer++;
     s32 ux = c->x >> 8, uz = c->z >> 8;
-    if (c->y < (-16 << 8) && world_in_water(ux, uz)) {
+    if (c->y < (-(16 << 8)) && world_in_water(ux, uz)) {
         // Sinking.
         c->vx -= c->vx >> 3;
         c->vz -= c->vz >> 3;
         c->vy = -48;
-        if (c->y < (-70 << 8)) { c->y = -70 << 8; c->vy = 0; }
+        if (c->y < (-(70 << 8))) { c->y = -(70 << 8); c->vy = 0; }
         c->spin_p -= c->spin_p >> 4;
         c->spin_r -= c->spin_r >> 4;
     } else {
@@ -555,7 +555,7 @@ static void crash_step(Car *c)
     c->heading += c->spin_h;
 
     s32 hg = world_height(nx >> 8, nz >> 8);
-    if (hg > (-100 << 8) && c->y <= hg) {
+    if (hg > (-(100 << 8)) && c->y <= hg) {
         // Tumble along the ground, losing energy each bounce.
         c->y = hg;
         c->vy = -c->vy / 3;
@@ -645,7 +645,7 @@ void car_step(Car *c, u16 keys)
     c->bob_v -= (c->bob_v * tn.damp) >> 10;
     c->bob += c->bob_v;
     if (c->bob > (8 << 8)) c->bob = 8 << 8;
-    if (c->bob < (-8 << 8)) c->bob = -8 << 8;
+    if (c->bob < (-(8 << 8))) c->bob = -(8 << 8);
     gearbox(c, keys);
 }
 

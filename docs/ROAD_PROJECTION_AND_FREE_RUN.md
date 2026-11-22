@@ -54,3 +54,15 @@ make vr-original VR_ROM="/path/to/Virtua Racing (USA).md"
 
 The performance numbers from the earlier driving report are historical;
 they have not been replaced by a new mGBA or physical-hardware benchmark.
+
+## Constant signed-shift portability
+
+The optional local ARM/Clang build reported negative signed left shifts in
+`src/car.c` and `src/softbody.c`, including water thresholds, crash height,
+suspension travel, and the hub-footprint offset. C's signed left shift of a
+negative value is undefined even when its desired number is obvious. These
+are now expressed as a positive left shift followed by negation, or an
+equivalent subtraction. The resulting integer constants are unchanged.
+Cross builds use `-Werror=shift-negative-value` to reject regressions.
+This is a portability and code-correctness fix, not a validated handling
+change or emulator performance improvement.

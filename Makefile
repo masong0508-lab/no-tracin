@@ -1,6 +1,6 @@
 CC      := arm-none-eabi-gcc
 OBJCOPY := arm-none-eabi-objcopy
-CFLAGS  := -mcpu=arm7tdmi -mthumb -mthumb-interwork -O2 -Wall -ffreestanding -fno-builtin
+CFLAGS  := -mcpu=arm7tdmi -mthumb -mthumb-interwork -O2 -Wall -Werror=shift-negative-value -ffreestanding -fno-builtin
 LDFLAGS := -mcpu=arm7tdmi -mthumb-interwork -nostartfiles -nostdlib -T gba.ld -Wl,--gc-sections
 OBJS    := build/crt0.o build/fill.o build/main.o build/render.o build/world.o build/car.o build/hud.o build/fx.o build/sound.o build/game.o build/menu.o build/track.o build/race.o build/softbody.o build/props.o build/edit.o build/tune.o build/libc.o
 
