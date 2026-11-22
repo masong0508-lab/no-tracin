@@ -39,7 +39,7 @@ The standard build has three custom courses inspired by Virtua Racing's corner o
 | Bay Bridge | Medium | Harbour straight with cranes, a climb onto a suspension bridge over the bay, a city chicane and S-bends down the waterfront, a lighthouse |
 | Acropolis | Expert | Climbing esses up to the temple hairpin, a long downhill, a double-apex right, a switchback and a last tight hairpin before the line |
 
-- **Arcade:** 4 laps against seven CPU cars, starting last on the grid. The clock counts down; the half-lap checkpoint and each lap line add time. Run out and it's TIME OVER. After the flag you get your position, total time and lap times.
+- **Arcade:** 3 laps against seven CPU cars, starting last on the grid. The clock counts down; the half-lap checkpoint and each lap line add time. Run out and it's TIME OVER. After the flag you get your position, total time and lap times.
 - **Free Run:** the course to yourself, no clock, as many laps as you like.
 - Off the road, the grass slows you right down; the barriers keep you on the circuit.
 - Best laps and best race times are saved for each course.
@@ -87,7 +87,7 @@ Pause, choose CHEATS and press the buttons in order. Type a code again to turn i
 - Records: best lap, high score, stunts, loops, longest jump, most airtime, top speed, crashes, time played, stars and tricks.
 
 ## Physics
-- Fixed 60 steps per second whatever the frame rate, so jumps and the loop behave the same at any speed of drawing.
+- Normal-speed physics uses one step per native GBA video-frame interval (about 59.73 steps per second), independently of drawing. Each draw can catch up at most four steps; genuine overload drops whole excess steps while retaining fractional time. Turbo, Chill and air slow-mo change the step interval.
 - Engine with a power curve and a six-speed automatic gearbox, brakes, reverse, air drag and rolling resistance. Top speed is about 92 mph on Stock.
 - Tyre grip: past the limit the car slides. Too much steering at speed understeers, the handbrake lets the tail out, and a sliding car swings back toward its path.
 - Gravity pulls you down slopes, which helps round the banked curve.
@@ -151,11 +151,14 @@ Run the source-only regression checks with `make test`. To additionally check
 the verified source ROM, set `VR_ROM` when running the Python tests.
 
 The pack skips repeated copies of identical source scenery, aligns opponents
-to banks, and fixes checkpoint/finish-tick race transitions. The current build
-also fixes lapped traffic and persistent soft-body drafting, and has completed
-faster Free Run laps and full three-lap Arcade races on every original course.
-See [the current race validation](docs/RACE_TRAFFIC_VALIDATION.md) for the tested
-binary, frame rates and coverage limits, and
+to banks, and fixes checkpoint/finish-tick race transitions, lapped traffic
+and persistent soft-body drafting. The current update also keeps controls and
+physics timing consistent between draws, handles the reproduced impact-force
+overflows, follows actual movement for wrong-way warnings, ranks close finishes
+by crossing order, and restores earned progress on crash recovery.
+See [the current driving validation](docs/DRIVING_CONSISTENCY_VALIDATION.md)
+for the tested binary, harder driving runs and coverage limits,
+[the traffic milestone](docs/RACE_TRAFFIC_VALIDATION.md), and
 [the earlier renderer measurements](docs/ORIGINAL_COURSES_CONTINUATION.md).
 
 ### Original Mega Drive response options
@@ -197,6 +200,9 @@ These are measured response options; a replacement physics model remains
 future work. [The selectable-control validation](docs/VR_CONTROLS_VALIDATION.md)
 documents original-CPU execution, all four profiles on all three courses,
 exact restoration and the observed player/demo scope. The
+[two-player continuation](docs/NATIVE_TWO_PLAYER_VALIDATION.md) verifies both
+controllers in the original split-screen mode across those same profiles and
+courses. The
 [first physics experiment](docs/VR_PHYSICS_RESEARCH.md) preserves the earlier
 longitudinal-response research.
 

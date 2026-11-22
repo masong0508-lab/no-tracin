@@ -250,7 +250,8 @@ static void impulse(const s32 *j, const s32 *p)
     s32 w0 = RS(dot14(t, ax_r) * inv_i[0], 8);
     s32 w1 = RS(dot14(t, ax_u) * inv_i[1], 8);
     s32 w2 = RS(dot14(t, ax_f) * inv_i[2], 8);
-    for (s32 k = 0; k < 3; k++) accw[k] += RS(ax_r[k] * w0 + ax_u[k] * w1 + ax_f[k] * w2, 14);
+    for (s32 k = 0; k < 3; k++)
+        accw[k] += RS((long long)ax_r[k] * w0 + (long long)ax_u[k] * w1 + (long long)ax_f[k] * w2, 14);
 }
 
 // Velocity change the gathered impulses give point p (units from cen).
@@ -922,6 +923,47 @@ static s32 suspension(void)
     return contacts;
 }
 
+// Rare high-load tyre impulses need a wider magnitude. This is the same
+// integer square root as isqrt(), extended to the wide intermediate only.
+static s32 tyre_sqrt_wide(unsigned long long v)
+{
+    unsigned long long r = 0, bit = 1ull << 62;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return (s32)r;
+}
+
+static s32 limit_tyre_force_wide(s32 *jt, s32 *jl, s32 lim)
+{
+    long long t = *jt, l = *jl;
+    unsigned long long square = t * t + l * l;
+    if (square <= (unsigned long long)lim * lim) return 0;
+    s32 mag = square <= 0xffffffffu ? isqrt((u32)square) : tyre_sqrt_wide(square);
+    s32 k = ((long long)lim * 7) >> 3;
+    *jt = t * k / mag;
+    *jl = l * k / mag;
+    return 1;
+}
+
+// Keep the normal tyre path's exact 32-bit rounding and division. The lab
+// can make the grip limit and slip impulses too large to square in s32.
+static inline s32 limit_tyre_force(s32 *jt, s32 *jl, s32 lim)
+{
+    s32 t = *jt, l = *jl;
+    if (lim > 32767 || iabs(t) > 32767 || iabs(l) > 32767)
+        return limit_tyre_force_wide(jt, jl, lim);
+    s32 square = t * t + l * l;
+    if (square <= lim * lim) return 0;
+    s32 mag = isqrt(square), k = (lim * 7) >> 3;
+    *jt = t * k / mag;
+    *jl = l * k / mag;
+    return 1;
+}
+
 // Tyre forces: drive, brakes and cornering grip, limited by each wheel's
 // load (a friction circle). Two passes so the four tyres settle together.
 static void tyres(Car *c, u16 keys, s32 vlong)
@@ -988,11 +1030,7 @@ static void tyres(Car *c, u16 keys, s32 vlong)
         if (jl > L) jl = L;
         if (jl < -L) jl = -L;
         // The friction circle: drive, brakes and cornering share the grip.
-        if (jt * jt + jl * jl > lim * lim) {
-            s32 mag = isqrt((u32)(jt * jt) + (u32)(jl * jl));
-            s32 k = (lim * 7) >> 3;                         // sliding grips a little less
-            jt = jt * k / mag;
-            jl = jl * k / mag;
+        if (limit_tyre_force(&jt, &jl, lim)) {
             if (iabs(vt) > 200) c->skid = 1;
             if (gas && w >= 2 && vlong < 900) c->spin = 1;
         }

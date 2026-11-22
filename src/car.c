@@ -7,6 +7,7 @@
 #include "car.h"
 #include "world.h"
 #include "track.h"
+#include "race.h"
 #include "softbody.h"
 #include "tune.h"
 
@@ -93,6 +94,7 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
 void car_respawn(Car *c)
 {
     car_reset(c, c->safe_x, c->safe_z, c->safe_heading);
+    if (g_track) race_on_respawn(c);
 }
 
 s32 car_speed(const Car *c)

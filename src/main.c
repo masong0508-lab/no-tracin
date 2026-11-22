@@ -623,8 +623,6 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
 
         // Fixed 60 Hz physics, however long the last frame took to draw.
         // Game speed and air slow-mo stretch or shrink the step.
-        if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
-        car->boost = (((keys & KEY_R) && g_game.nitro > 0) || edit_boosting()) && countdown <= 0 && car->mode != CAR_CRASH;
         u32 now = cycles();
         acc += now - last;
         last = now;
@@ -633,6 +631,10 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
             u32 len = step_len[g_opt[OPT_SPEED]];
             if (g_opt[OPT_SLOWMO] && car->mode == CAR_AIR) len *= 3;
             if (acc < len || steps >= 4) break;
+            // Fuel, countdown, crashes and race state can change between
+            // steps sharing this draw. Resolve their controls every step.
+            if (g_track && g_race.state != RS_RACING) keys = g_race.state == RS_GOAL ? KEY_A : KEY_B;   // coast home
+            car->boost = (((keys & KEY_R) && g_game.nitro > 0) || edit_boosting()) && countdown <= 0 && car->mode != CAR_CRASH;
             if (countdown > 0) {
                 // Hold the car on the line; the gas still revs the engine.
                 if (countdown % 60 == 0) sound_play(SFX_BEEP);
@@ -658,7 +660,13 @@ static s32 play(s32 load_from, s32 track, s32 race_mode, s32 editor)
             acc -= len;
             steps++;
         }
-        if (steps == 4) acc = 0;
+        if (steps == 4) {
+            // Bound a genuine overload without throwing away the fractional
+            // time that normally carries into the next rendered frame.
+            u32 len = step_len[g_opt[OPT_SPEED]];
+            if (g_opt[OPT_SLOWMO] && car->mode == CAR_AIR) len *= 3;
+            if (acc >= len) acc %= len;
+        }
         label_timer -= steps;
         if (g_new_best) {
             g_new_best = 0;

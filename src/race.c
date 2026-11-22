@@ -10,6 +10,10 @@
 #include "softbody.h"
 
 Race g_race;
+// Race credit and road projection paired with the car's safe respawn pose.
+static s32 safe_progress, safe_d;
+// Consecutive observed Q8 poses resolve crossing time at the physical line.
+static s32 previous_x, previous_z;
 
 typedef struct {
     s32 s, v;                 // progress (Q8) and speed (Q8 per step)
@@ -211,6 +215,10 @@ void race_begin(s32 track, s32 mode, Car *player)
     g->last_d = d + t->lap;
     g->hint = hint;
     g->position = slot + 1;
+    safe_progress = g->progress;
+    safe_d = g->last_d;
+    previous_x = player->x;
+    previous_z = player->z;
 
     for (s32 i = 0; i < RIVALS; i++) {
         Rival *r = &rivals[i];
@@ -226,6 +234,18 @@ void race_begin(s32 track, s32 mode, Car *player)
         r->cap = 0x7FFF;
         rival_pose(r);
     }
+}
+
+void race_on_respawn(Car *player)
+{
+    if (!player || !g_track) return;
+    // A known respawn returns to previously earned distance. Keep earned
+    // laps/checkpoints and all clocks; repeating the road earns no bonus.
+    g_race.progress = safe_progress;
+    g_race.last_d = safe_d;
+    g_race.wrong_way = g_race.wrong_steps = 0;
+    previous_x = player->x;
+    previous_z = player->z;
 }
 
 // ---------------------------------------------------------------- per step
@@ -361,10 +381,16 @@ void race_step(Car *player, s32 started)
     const TrackDef *t = g_track;
     RaceRecords *records = &recs[g->track / TRACKS_PER_SET];
     s32 record_index = g->track % TRACKS_PER_SET;
+    s32 player_before = g->progress, rival_before[RIVALS];
+    s32 x_before = previous_x, z_before = previous_z;
+    previous_x = player->x;
+    previous_z = player->z;
+    if (g->mode == RACE_ARCADE && g->state == RS_RACING)
+        for (s32 i = 0; i < RIVALS; i++) rival_before[i] = rivals[i].s;
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
     s32 found = track_find(x, z, &hit);
-    // A reset can leave race credit offset from the car's actual location.
+    // Ignored projection jumps can offset credit from the actual location.
     // Traffic uses the current projection, or the last one if off the road.
     s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
     rivals_step(player, started, d, found ? hit.lat : 0);
@@ -372,7 +398,7 @@ void race_step(Car *player, s32 started)
         s32 delta = d - g->last_d;
         if (delta > t->lap / 2) delta -= t->lap;
         if (delta < -t->lap / 2) delta += t->lap;
-        if (iabs(delta) < 200) g->progress += delta;   // a reset jumps; ignore it
+        if (iabs(delta) < 200) g->progress += delta;   // reject unrelated projection jumps
         g->last_d = d;
         g->hint = hit.seg;
         // Respawn on the centreline here after a wreck.
@@ -382,10 +408,15 @@ void race_step(Car *player, s32 started)
             player->safe_x = sx;
             player->safe_z = sz;
             player->safe_heading = sh;
+            safe_progress = g->progress;
+            safe_d = d;
         }
-        // Wrong way: facing back along the course while moving.
-        s32 diff = (s16)(player->heading - t->pts[hit.seg].heading);
-        if (iabs(diff) > 22000 && car_speed(player) > 300 && player->mode == CAR_GROUND) g->wrong_steps++;
+        // Wrong way follows motion, including reverse gear, within a
+        // roughly 120-degree backward cone relative to the road tangent.
+        const TrackPt *p = &t->pts[hit.seg];
+        s32 speed = car_speed(player);
+        s32 along = (player->vx * p->ux + player->vz * p->uz) >> 14;
+        if (speed > 300 && along * 2 < -speed && player->mode == CAR_GROUND) g->wrong_steps++;
         else g->wrong_steps = 0;
         g->wrong_way = g->wrong_steps > 45;
     }
@@ -463,6 +494,37 @@ void race_step(Car *player, s32 started)
     s32 pos = 1;
     for (s32 i = 0; i < RIVALS && g->mode == RACE_ARCADE; i++)
         if ((rivals[i].s >> 8) > g->progress) pos++;
+    // At the flag, classify by crossing time, not distance driven after it.
+    if (racing && g->state == RS_GOAL && g->mode == RACE_ARCADE) {
+        s32 goal = g->laps * t->lap, goal_q8 = goal * 256;
+        long long player_need = goal - player_before;
+        long long player_move = g->progress - player_before;
+        // Credit is integral and can jump at a route's closing seam. Use
+        // the actual Q8 movement across the start point's perpendicular
+        // plane when available, retaining all dot-product precision.
+        // The credit rules above still decide whether this lap is earned.
+        const TrackPt *line = &t->pts[0];
+        s32 lx = line->x * 256, lz = line->z * 256;
+        long long side_before = (long long)(x_before - lx) * line->ux +
+                                (long long)(z_before - lz) * line->uz;
+        long long side_after = (long long)(previous_x - lx) * line->ux +
+                               (long long)(previous_z - lz) * line->uz;
+        if (side_before <= 0 && side_after >= 0 && side_after > side_before) {
+            player_need = -side_before;
+            player_move = side_after - side_before;
+        }
+        pos = 1;
+        for (s32 i = 0; i < RIVALS; i++) {
+            s32 before = rival_before[i], after = rivals[i].s;
+            if (before >= goal_q8) pos++;
+            else if (after >= goal_q8 && player_need > 0 && player_move > 0) {
+                // Compare fractions of this step without division. Exact
+                // ties favor the player, as with the strict running order.
+                if ((long long)(goal_q8 - before) * player_move <
+                    (long long)player_need * (after - before)) pos++;
+            }
+        }
+    }
     // Include movement on the goal tick, then freeze the finishing place.
     if (racing) g->position = pos;
 }
