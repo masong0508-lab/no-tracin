@@ -4,7 +4,16 @@ import os
 import sys
 import unittest
 from math import pi, cos, sin
-import numpy as np
+# CI deliberately installs only Python stdlib. The original private importer
+# uses NumPy, but our source-route correctness tests must NOT require it.
+class SyntheticDistanceGrid:
+    shape=(1024,1024)
+    def __getitem__(self,point):
+        row,col=point
+        if not (0<=row<1024 and 0<=col<1024):
+            raise IndexError(point)
+        return 3
+
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
@@ -52,7 +61,7 @@ class OriginalRouteSourceTests(unittest.TestCase):
         class Flat:
             def sample_world(self,x,z):
                 return type('Hit',(),{'height':1000})()
-        d=np.ones((1024,1024),dtype='float64')*3
+        d=SyntheticDistanceGrid()
         points,lap,audit=original_source_route(synthetic_loop(),0,Flat(),None,
                                                 500,d,None,pitch=16)
         self.assertEqual(len(points),65)
