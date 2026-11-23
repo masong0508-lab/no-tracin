@@ -143,7 +143,9 @@ int main(void) {
         # Exact verified source identity is required before decoding.
         code = (ROOT/'tools/import_vrd_32x_explorer.py').read_text()
         self.assertIn("hashlib.sha256(source).hexdigest()!=ROM_SHA256", code)
-        self.assertIn("'skeleton_cycle_NOT_authentic_start_finish_or_lap'", code)
+        self.assertIn('original_source_route(', code)
+        self.assertIn('authentic_ordered_main_road_geometry_verified=True', code)
+        self.assertIn("'ORIGINAL_ORDERED_68000_SOURCE_ROAD_NOT_LAP_VERIFIED'", code)
         self.assertIn('lap_start_finish_verified=False', code)
 
 
