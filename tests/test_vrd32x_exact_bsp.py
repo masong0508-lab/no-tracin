@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from decode_vrd_32x_surface import RoadSurface, test_bsp_group
 from inspect_vrd_32x_tables import ROM_SHA256, inspect_image
-from vrd32x_exact_bsp import (contains, clipped_polygon, first_group,
-                              group_halfplanes, signed_area, tile_regions)
+from vrd32x_exact_bsp import (audit_mode_group_identity, contains,
+                              clipped_polygon, first_group, group_halfplanes,
+                              mode_polygon_bounds, signed_area, tile_regions)
 
 
 def synthetic_group(branches):
@@ -98,6 +99,15 @@ class ExactBspHalfplanes(unittest.TestCase):
             background = 29
             bank_start = 0
             limit_word = 29
+            slot = 0
+
+            def sample_local(self, row, col, x, z):
+                if self.grid[row*64+col] == self.background:
+                    return None
+                for i in range(2):
+                    if test_bsp_group(self.rom,2+28*i,2*x,2*z):
+                        return type("Hit", (), {"group": i})()
+                return None
         Source.grid[0] = 0
         regions = tile_regions(Source,0,0)
         self.assertEqual(len(regions),2)
@@ -105,6 +115,11 @@ class ExactBspHalfplanes(unittest.TestCase):
         self.assertEqual(first_group(regions,400,80),1)
         self.assertEqual(first_group(regions,-1,80),None)
         self.assertEqual(tile_regions(Source,0,1),())
+        self.assertEqual(mode_polygon_bounds(Source), (0,320,0,320))
+        audit = audit_mode_group_identity(Source,sample_points=(0,63,255,383,511))
+        self.assertTrue(audit["first_match_source_parity"])
+        self.assertEqual(audit["sample_points_verified"],25)
+        self.assertEqual(audit["active_source_tiles"],1)
         with self.assertRaises(ValueError):
             tile_regions(Source,64,0)
 
