@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from vr_rom import (ASPHALT, ROM_SIZE, SOLID, RomError, parse_rom,
                     physics_height_at, surface_at)
-from import_vr_original import source_road_bounds
+from import_vr_original import route_records, source_road_bounds, track_header
 
 
 def synthetic_course(planes=None, rows=65):
@@ -85,6 +85,31 @@ class RomRejectionTests(unittest.TestCase):
         fake[0x1F0] = ord("U")
         with self.assertRaisesRegex(RomError, "Unsupported ROM revision"):
             parse_rom(bytes(fake))
+
+
+class OriginalAsymmetricWidthTests(unittest.TestCase):
+    def test_native_left_right_road_widths_survive_private_import(self):
+        # A purely artificial four-node square; no original donor content.
+        coords = ((0, 0), (800, 0), (800, 800), (0, 800))
+        route = [
+            dict(x=x, z=z, y=0, half_width_left=400 + i * 80,
+                 half_width_right=800 - i * 80)
+            for i, (x, z) in enumerate(coords)
+        ]
+        records, lap = route_records({"route": route})
+        self.assertEqual(lap, 800)
+        self.assertEqual([p["left"] for p in records], [100, 120, 140, 160])
+        self.assertEqual([p["right"] for p in records], [200, 180, 160, 140])
+        self.assertEqual([p["width"] for p in records], [100, 120, 140, 140])
+        dummy_courses = [{"name": name, "level": "TEST", "route": route}
+                         for name in ("BIG FOREST", "BAY BRIDGE", "ACROPOLIS")]
+        generated, _, stats = track_header(
+            {"source": {"sha256": "00" * 32}, "courses": dummy_courses}
+        )
+        self.assertIn("vr_native_left_widths[3]", generated)
+        self.assertIn("vr_native_right_widths[3]", generated)
+        self.assertIn("vr_native_route_counts[3] = { 4, 4, 4 }", generated)
+        self.assertTrue(all(row["asymmetric_native_widths_preserved"] for row in stats))
 
 
 class SourceAsphaltMapTests(unittest.TestCase):
