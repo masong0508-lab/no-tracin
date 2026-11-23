@@ -4,6 +4,34 @@ A stunt-driving game for the Game Boy Advance: Race Drivin' (Genesis) mixed with
 
 The standard `notracin.gba` build uses this project's own code and assets. The optional original-course build described below imports course data from a locally supplied Virtua Racing ROM. Source ROMs and generated imported assets are kept outside the tracked source tree.
 
+## Latest owner-original 32X source-road build (Nov 22, 2026)
+
+**No reset necessary:** the five named Deluxe courses now use their **original
+ordered 68000 source road coordinates**, not synthetic road-study skeleton
+loops. The verified cartridge links the source course index to Big Forest
+(163 nodes), Bay Bridge (199), Acropolis (235), Highland (203) and Sand Park
+(191). Highland also preserves the original raised alternate BSP bridge as
+a separate driving height above its underpass. Source-road map previews
+show accurate asphalt silhouettes with a moving location dot.
+
+Build the owner-only standalone 8-environment GBA ROM using an unmodified
+verified US Sega 32X cartridge, kept outside the public Git repository:
+
+```sh
+make vr32x-owned VR32_BUILD=build/vr32x-native-route VR32_DETAIL=16 \
+  VR32X_ROM='/private/Virtua Racing Deluxe (USA).32x' -j2
+```
+
+At game selection press L/R to choose the original 32X road set, then A to
+Free Drive. The original Sega official race starts, laps, checkpoint/AI
+logic, and SH-2 scenery have **not** been reconstructed, so this build
+keeps source Free Drive distinct from the completed custom arcade races.
+The existing historical "road studies" sections later in this README
+describe earlier research, not the current restored source-coordinate mode.
+See [the complete five-course original-coordinate verification](docs/32X_ORIGINAL_ORDERED_ROAD_GEOMETRY_20261122.md),
+[Highland's original two-level bridge](docs/ORIGINAL_32X_MODE3_ALTERNATE_BRIDGE_20261122.md),
+and [the owner-only milestone record](docs/OWNER_32X_PLAYABLE_MILESTONE_20261122.md).
+
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
 - Turn on "skip BIOS intro" if your emulator asks. The ROM header has no Nintendo logo, so the real BIOS intro won't boot it.
