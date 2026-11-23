@@ -82,6 +82,10 @@ int main(void) {
         self.assertIn("ROM_SHA256",code)
         self.assertIn("inspect_image(source,require_identity=True)",code)
         self.assertIn("native_collision_mesh_in_gba=exact_mesh",code)
+        # Source-only CI has no commercial 32X data and may not install the
+        # private importer dependencies. Still ensure the entire optional
+        # import program is syntactically executable Python.
+        compile(code,str(ROOT/"tools/import_vrd_32x_explorer.py"),"exec")
 
 
 if __name__=="__main__":
