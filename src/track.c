@@ -1071,6 +1071,15 @@ void track_map(volatile u16 *page, s32 index, s32 x0, s32 y0, s32 w, s32 h, u8 c
         return;
     }
 #endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Authentic Genesis map mode: draw all original packed asphalt cells,
+    // including source pit/branch geometry, not a uniform-width route sketch.
+    if (index >= TRACKS_PER_SET && index < TRACKS_PER_SET * 2) {
+        vr_original_map(page, index - TRACKS_PER_SET, x0, y0, w, h, color,
+                        t->pts, t->count, dot_d, dot_color);
+        return;
+    }
+#endif
     s32 minx = 99999, maxx = -1, minz = 99999, maxz = -1;
     for (s32 i = 0; i < t->count; i++) {
         const TrackPt *p = &t->pts[i];
