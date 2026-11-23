@@ -31,6 +31,7 @@ try:
     from tools.vrd32x_course_identity import verify_course_identity, COURSE_NAMES
     from tools.vrd32x_native_routes import original_source_route
     from tools.vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
+    from tools.vrd32x_render_candidates import raster_road_candidates
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface, signed16
     from export_vrd_32x_surface_mesh import grid_samples
@@ -41,6 +42,7 @@ except ModuleNotFoundError:
     from vrd32x_course_identity import verify_course_identity, COURSE_NAMES
     from vrd32x_native_routes import original_source_route
     from vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
+    from vrd32x_render_candidates import raster_road_candidates
 
 GAME_WORLD = 16384
 HEIGHT_DIV = 32  # VISUAL/PHYSICS CALIBRATION ONLY; native units unverified
@@ -299,6 +301,8 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         data.append(c_array('u16',height_name,relief,18))
         data.append(c_array('u8',cover_name,cover,28))
         data.append(c_array('u8',f'vrd_native_ribbon_skip_{slot}',ribbon_overdraw_skip(route),32))
+        native_candidates = raster_road_candidates(samples, SIDE, bridge_samples)
+        data.append(c_array('u8',f'vrd_native_raster_candidates_{slot}',native_candidates,32))
         data.append('static const VrdScenery '+prop_name+'['+str(len(props))+
                     '] = {\n'+',\n'.join('    { '+', '.join(map(str,item))+
                         ' }' for item in props)+'\n};')
@@ -382,6 +386,8 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                                approximate_gba_scene_name=SOURCE_SCENES[slot],
                                extrapolated_native_road_terrain_grid='65x65_u16_ROMonly',
                                source_collision_anchored_gba_visual_props=len(props),
+                               original_road_render_candidate_cells=sum(v.bit_count() for v in native_candidates),
+                               original_road_render_candidate_rom_bytes=len(native_candidates),
                                original_sh2_terrain_and_props_recovered=False,
                                original_sh2_scenery_verified=False,
                                original_start_finish_verified=False,
@@ -401,6 +407,8 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                 ', '.join(terrain_heights)+' };')
     data.append('static const u8 *const vrd_native_terrain_cover[5] = { '+
                 ', '.join(terrain_covers)+' };')
+    data.append('static const u8 *const vrd_native_raster_candidates[5] = { '+
+                ', '.join(f'vrd_native_raster_candidates_{i}' for i in range(5))+' };')
     data.append('static const u8 *const vrd_native_ribbon_skip[5] = { '+
                 ', '.join(f'vrd_native_ribbon_skip_{i}' for i in range(5))+' };')
     data.append('static const VrdScenery *const vrd_native_scenery[5] = { '+

@@ -403,7 +403,12 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
         // Skip duplicate fill entirely, but do NOT erase pit/branch asphalt.
         if((u32)x<16384 && (u32)z<16384){
             u32 rc=(u32)(z>>6)*256+(u32)(x>>6);
-            if(vrd_native_ribbon_skip[slot][rc>>3] & (1u<<(rc&7)))continue;
+            // Offline ROM-only gate mirrors the exact 3-of-4 native
+            // sample rule below. Empty scenery-space candidates never
+            // enter the per-frame 68000 road height decoder.
+            u8 bit=(u8)(1u<<(rc&7));
+            if(!(vrd_native_raster_candidates[slot][rc>>3] & bit))continue;
+            if(vrd_native_ribbon_skip[slot][rc>>3] & bit)continue;
         }
 #endif
 #ifdef VRD_EXACT_SOURCE_MESH

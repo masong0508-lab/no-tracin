@@ -97,6 +97,10 @@ static const u8 cover[4096]={[0 ... 4095]=4};
 static const u8 *const vrd_native_terrain_cover[5]={cover,cover,cover,cover,cover};
 static const u8 skip[8192]={0};
 static const u8 *const vrd_native_ribbon_skip[5]={skip,skip,skip,skip,skip};
+// The exact import-time quad gate allows every synthetic surface cell.
+// It must be present in source-only ROM-free production C tests.
+static const u8 candidates[8192]={[0 ... 8191]=255};
+static const u8 *const vrd_native_raster_candidates[5]={candidates,candidates,candidates,candidates,candidates};
 static const VrdScenery props[1]={{520,42,520,16384,0,0,80}};
 static const VrdScenery *const vrd_native_scenery[5]={props,props,props,props,props};
 static const u8 vrd_native_scenery_count[5]={1,1,1,1,1};

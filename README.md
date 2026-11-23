@@ -32,6 +32,22 @@ See [the complete five-course original-coordinate verification](docs/32X_ORIGINA
 [Highland's original two-level bridge](docs/ORIGINAL_32X_MODE3_ALTERNATE_BRIDGE_20261122.md),
 and [the owner-only milestone record](docs/OWNER_32X_PLAYABLE_MILESTONE_20261122.md).
 
+## November 23, 2026: original 32X landscapes performance pass
+
+The optional original 32X landscape course build now eliminates empty 64-unit
+source-road patches **before** expensive height sampling and projection.
+All five owner-cartridge-derived environments drive and render faster in
+matched short mGBA tests (Big Forest 18.78→20.51, Bay Bridge 19.57→24.21,
+Acropolis 16.19→22.32, Highland 16.11→19.25, Sand Park 17.68→21.45
+rendered game FPS). Original terrain and GBA-authored scenery remain visible;
+source road/bridge collision and saves are unchanged. The private generated
+five 8192-byte culling masks occupy **only GBA ROM**; no extra framebuffer,
+heap, IWRAM or EWRAM. See
+[original-source rendering and benchmark documentation](docs/32X_SOURCE_SCENE_ROM_CULLING_FPS_PASS_20261123.md).
+
+This is not an authenticated port of the original SH-2 scene models or
+competitive start/finish/AI rules; those remain explicitly unfinished.
+
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
 - Turn on "skip BIOS intro" if your emulator asks. The ROM header has no Nintendo logo, so the real BIOS intro won't boot it.
