@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from decode_vrd_32x_surface import RoadSurface, test_bsp_group
 from inspect_vrd_32x_tables import ROM_SHA256, inspect_image
+from export_vrd32x_exact_bsp import vector_svg
 from vrd32x_exact_bsp import (audit_mode_group_identity, contains,
                               clipped_polygon, first_group, group_halfplanes,
                               mode_polygon_bounds, signed_area, tile_regions)
@@ -120,6 +121,12 @@ class ExactBspHalfplanes(unittest.TestCase):
         self.assertTrue(audit["first_match_source_parity"])
         self.assertEqual(audit["sample_points_verified"],25)
         self.assertEqual(audit["active_source_tiles"],1)
+        svg, stats = vector_svg(Source)
+        self.assertIn("source BSP road footprints",svg)
+        self.assertIn('viewBox="0 0 16384 16384"',svg)
+        self.assertEqual(svg.count("<polygon points="),2)
+        self.assertEqual(stats["nondegenerate_vector_footprints"],2)
+        self.assertFalse(stats["named_deluxe_course_verified"])
         with self.assertRaises(ValueError):
             tile_regions(Source,64,0)
 
