@@ -189,6 +189,35 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
             }
         }
 #endif
+#ifdef VRD_HAS_NATIVE_OVERPASS
+    // The upper bridge is visible from the true lower underpass.
+    // Reserve <=24 existing road faces. Source upper tiles are in ROM;
+    // no extra framebuffer, heap, RAM cache or per-frame mesh build.
+    if(slot==3){
+        s32 bridge_faces=0;
+        s32 start_x=(focus_x/64)*64-256,start_z=(focus_z/64)*64-256;
+        for(s32 iz=0;iz<8 && bridge_faces<24 && exact_faces<180;iz++)
+            for(s32 ix=0;ix<8 && bridge_faces<24 && exact_faces<180;ix++){
+                s32 x=start_x+ix*64,z=start_z+iz*64;
+                s32 top[4]={overpass_sample(x,z),
+                            overpass_sample(x,z+64),
+                            overpass_sample(x+64,z+64),
+                            overpass_sample(x+64,z)};
+                if(top[0]<0||top[1]<0||top[2]<0||top[3]<0)continue;
+                s32 bottom=normal_sample(slot,x+32,z+32);
+                if(bottom<0)continue;
+                s32 up=(top[0]+top[1]+top[2]+top[3])/4;
+                if(up<=bottom+12 ||
+                   native_reference_height>(bottom+up)*128)
+                    continue;
+                if(!r_visible(x+32,z+32,68))continue;
+                ground_quad(x,z,64,top[0],top[1],top[2],top[3],
+                            COLOR(M_ASPHALT,(ix+iz)&1));
+                bridge_faces++;
+                exact_faces++;
+            }
+    }
+#endif
     // Distant sourced road uses the original coarse graphics LOD.
     // Total source road face budget remains <=180. No heap/framebuffer.
     s32 base_x=(focus_x/64)*64-576,base_z=(focus_z/64)*64-576;
