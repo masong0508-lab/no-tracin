@@ -173,6 +173,19 @@ void vrd32x_study_map(volatile u16 *page,s32 slot,s32 x0,s32 y0,s32 w,s32 h,u8 c
     s32 ox=x0+(w-dx*256/scale)/2;
     s32 oy=y0+(h+dz*256/scale)/2;
 
+    if (w==102 && h==68) {
+        // This screen is animated, but the original sampled road silhouette
+        // is static. Use a private-source-derived 867-byte ROM bitmap
+        // instead of tens of thousands of 32X tile lookups each video frame.
+        // The cached bits are the same source-mask projection as below.
+        const u8 *bits=vrd_study_preview_bits[slot];
+        for(s32 py=0;py<68;py++)for(s32 px=0;px<102;px++){
+            s32 i=py*102+px;
+            if(bits[i>>3] & (1u<<(i&7)))
+                map_pixel(page,x0+px,y0+py,color);
+        }
+        return;
+    }
     // A pixel represents several ROM sample cells on a small screen.
     // Source hit probes at its centre and four subpixel offsets retain
     // thin verified side roads without inventing a tile-wide road fill.
