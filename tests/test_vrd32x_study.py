@@ -32,6 +32,10 @@ static const u16 test_h2[64] = { ''' + ', '.join(map(str, [90 - 4 * row - 3 * co
 static const u16 test_h3[64] = { ''' + ', '.join(map(str, [65535 if row < 4 and col < 4 else 10 + 4 * row + 3 * col for row in range(8) for col in range(8)])) + ''' };
 static const u16 *const vrd_study_lookups[5] = { test_tile, test_tile, test_tile, test_tile, test_tile };
 static const u16 *const vrd_study_heights[5] = { test_h, test_h2, test_h3, test_h, test_h };
+static const u16 vrd_study_preview_bounds[5][4] = {
+  {0,255,0,255}, {0,255,0,255}, {0,255,0,255},
+  {0,255,0,255}, {0,255,0,255}
+};
 ''')
             fixture = temp / 'verify.c'
             fixture.write_text(r'''
@@ -76,17 +80,22 @@ int main(void) {
     assert(!vrd32x_study_ground_plane(0,10,10,24,&h,&gx,&gz));
     assert(h==0 && gx==0 && gz==0);
     assert(vrd32x_study_surface(5,96,96) == SURF_GRASS);
-    // The old tile-level map preview wrongly painted all four quadrants,
-    // including the synthetic unsupported top-left 4x4 source mask.
+    // Production source-mask map: 8x8 genuine sample cells, never a
+    // tile-wide filled rectangle. +Z is up; lower-left contains a genuine
+    // synthetic 4x4 unsupported gap, all other quadrants contain road.
     static volatile u16 map_page[SCREEN_W * SCREEN_H / 2];
-    vrd32x_study_map(map_page,2,10,10,128,128,5);
 #define MAP_PIXEL(xx,yy) (((xx)&1) ? ((map_page[((yy)*SCREEN_W+(xx))/2]>>8)&255) : (map_page[((yy)*SCREEN_W+(xx))/2]&255))
-    assert(MAP_PIXEL(10,10)==0);
-    assert(MAP_PIXEL(11,10)==5);
-    assert(MAP_PIXEL(10,11)==5);
-    assert(MAP_PIXEL(11,11)==5);
+    vrd32x_study_map(map_page,2,10,10,128,128,5);
+    assert(MAP_PIXEL(10,10)==0);    // no drawing outside source aspect bounds
+    assert(MAP_PIXEL(32,110)==0);   // unsupported lower-left source quadrant
+    assert(MAP_PIXEL(32,35)==5);   // upper-left: original sample coverage
+    assert(MAP_PIXEL(110,110)==5); // lower-right: original sample coverage
+    assert(MAP_PIXEL(110,35)==5);  // upper-right: original sample coverage
     vrd32x_study_map(map_page,5,10,10,128,128,5); // invalid slot must be safe
-    assert(MAP_PIXEL(10,10)==0);
+    assert(MAP_PIXEL(32,110)==0);
+    assert(MAP_PIXEL(110,35)==5);
+    vrd32x_study_map(map_page,0,10,10,128,128,7);
+    assert(MAP_PIXEL(32,110)==7); // true source coverage, not inherited hole
     return 0;
 }
 ''')
