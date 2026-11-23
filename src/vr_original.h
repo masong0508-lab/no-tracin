@@ -29,9 +29,18 @@ typedef struct {
     const u16 *surface_grid;
     const u8 *surface_tiles;
     u16 surface_rows;
+    // Source asphalt-mask bounds, generated privately. Includes pits and
+    // side roads omitted by the main-race-centreline preview.
+    u16 road_min_x, road_max_x, road_min_z, road_max_z;
 } VrOriginalCourse;
 
 void vr_original_draw(s32 course, s32 focus_x, s32 focus_z, s32 frame);
+// Render the *actual source asphalt mask*, not the simplified race spline.
+// pts/dot_d are used only for the original start marker and moving dot.
+void vr_original_map(volatile u16 *page, s32 course,
+                     s32 x0, s32 y0, s32 w, s32 h, u8 color,
+                     const void *route_pts, s32 route_count,
+                     s32 dot_d, u8 dot_color);
 s32 vr_original_height(s32 course, s32 x, s32 z);
 s32 vr_original_surface(s32 course, s32 x, s32 z);
 void vr_original_gradient(s32 course, s32 x, s32 z, s32 *gx, s32 *gz);
