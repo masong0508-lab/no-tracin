@@ -259,3 +259,95 @@ def audit_mode_group_identity(road, *, sample_points=(0, 1, 63, 127, 255,
             "clipped_source_regions": polygons,
             "sample_points_verified": comparisons,
             "first_match_source_parity": True}
+
+
+class PriorityFace(NamedTuple):
+    """A disjoint collision-plane footprint with its native source group."""
+    group: int
+    polygon: tuple[tuple[Fraction, Fraction], ...]
+
+
+def clip_existing_polygon(poly: tuple[tuple[Fraction, Fraction], ...],
+                          halfplane: HalfPlane, *,
+                          inside: bool = True
+                          ) -> tuple[tuple[Fraction, Fraction], ...]:
+    """Clip a source polygon to one halfplane or its outside complement.
+
+    The continuous boundaries share an edge; the 68000 exact integer
+    strict/inclusive boundary is already encoded in the inequality limit.
+    Fraction arithmetic makes this partition deterministic with no
+    floating-point slivers.
+    """
+    if not poly:
+        return ()
+    out = []
+    x0, z0 = poly[-1]
+    d0 = halfplane.ax*x0 + halfplane.az*z0 - halfplane.bound
+    if not inside:
+        d0 = -d0
+    for x1, z1 in poly:
+        d1 = halfplane.ax*x1 + halfplane.az*z1 - halfplane.bound
+        if not inside:
+            d1 = -d1
+        keep0, keep1 = d0 <= 0, d1 <= 0
+        if keep0 != keep1:
+            frac = d0 / (d0-d1)
+            out.append((x0+frac*(x1-x0),z0+frac*(z1-z0)))
+        if keep1:
+            out.append((x1,z1))
+        x0,z0,d0=x1,z1,d1
+    clean=[]
+    for p in out:
+        if not clean or p!=clean[-1]:
+            clean.append(p)
+    if len(clean)>1 and clean[-1]==clean[0]:
+        clean.pop()
+    return tuple(clean)
+
+
+def tile_priority_faces(road, row: int, col: int,
+                        *, max_faces: int = 2048) -> tuple[PriorityFace, ...]:
+    """Partition native collision footprints by original BSP group priority.
+
+    Each later region loses area already covered by any *earlier* group.
+    This preserves original plane precedence when generating a private
+    3D collision-surface inspection mesh. No SH-2 scene vertices are
+    claimed or exported. The safety limit rejects pathological tiles.
+    """
+    if not 1 <= max_faces <= 65535:
+        raise ValueError("invalid source polygon budget")
+    regions = tile_regions(road,row,col)
+    result = []
+    earlier = []
+    for source in regions:
+        if signed_area(source.polygon) <= 0:
+            earlier.append(source)
+            continue
+        fragments=[source.polygon]
+        for old in earlier:
+            new=[]
+            for poly in fragments:
+                still_inside=poly
+                # Outside each constraint in turn, keeping all earlier
+                # constraints inside on the remainder. These disjoint
+                # outside fragments exactly partition poly \ old.
+                for plane in old.halfplanes:
+                    outside = clip_existing_polygon(still_inside,plane,
+                                                    inside=False)
+                    if signed_area(outside)>0:
+                        new.append(outside)
+                        if len(result)+len(new)>max_faces:
+                            raise ValueError("source BSP face budget exceeded")
+                    still_inside = clip_existing_polygon(still_inside,plane,
+                                                         inside=True)
+                    if not still_inside:
+                        break
+            fragments=new
+            if not fragments:
+                break
+        for fragment in fragments:
+            result.append(PriorityFace(source.group,fragment))
+            if len(result)>max_faces:
+                raise ValueError("source BSP face budget exceeded")
+        earlier.append(source)
+    return tuple(result)
