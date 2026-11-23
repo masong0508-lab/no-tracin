@@ -119,6 +119,47 @@ def face_color(course, polygon, palette):
     return min(palette, key=lambda entry: sum((entry[1][i]-target[i])**2 for i in range(3)))[0]
 
 
+def source_road_bounds(terrain):
+    """GBA-world bounds of the donor's *packed asphalt mask*, including pits.
+
+    Derive preview extents from source cells, never from a guessed centreline.
+    The original map has 128 tile columns, 16x16 two-bit cells per tile,
+    and eight GBA world units per collision cell. Only category 0 is asphalt.
+    This runs once in the private importer; no scanning or RAM cache at boot.
+    """
+    rows = terrain["surface_rows"]
+    grid = terrain["surface_grid"]
+    tiles = terrain["surface_tiles"]
+    require(len(grid) == rows * 128, "Invalid surface grid size")
+    low_x, high_x = 2048, -1
+    low_z, high_z = rows * 16, -1
+    for row in range(rows):
+        for col in range(128):
+            start = grid[row * 128 + col] * 64
+            require(start + 64 <= len(tiles), "Source surface tile outside bank")
+            for local_z in range(16):
+                for byte_x in range(4):
+                    packed = tiles[start + local_z * 4 + byte_x]
+                    if packed == 0xAA:  # four solid source cells
+                        continue
+                    for cell in range(4):
+                        if (packed >> ((3 - cell) * 2)) & 3:
+                            continue
+                        x = col * 16 + byte_x * 4 + cell
+                        z = row * 16 + local_z
+                        low_x = min(low_x, x)
+                        high_x = max(high_x, x)
+                        low_z = min(low_z, z)
+                        high_z = max(high_z, z)
+    require(high_x >= low_x and high_z >= low_z, "No original asphalt in surface grid")
+    # Keep a small framing margin. Z increases in the opposite direction
+    # to the original packed row index (see vr_original.c:raw_surface).
+    return (max(0, low_x * 8 - 64),
+            min(WORLD - 1, (high_x + 1) * 8 + 64),
+            max(0, WORLD - (high_z + 1) * 8 - 64),
+            min(WORLD - 1, WORLD - low_z * 8 + 64))
+
+
 def mesh_header(courses):
     out = ["// Generated from a locally supplied ROM. Do not commit this file.",
            "#ifndef VR_ORIGINAL_MESH_DATA_H", "#define VR_ORIGINAL_MESH_DATA_H"]
@@ -173,15 +214,17 @@ def mesh_header(courses):
         out.extend("    {"+", ".join(map(str,s))+"}," for s in sections)
         out.append("};")
         terrain=course["terrain"]
+        road_bounds=source_road_bounds(terrain)
         out.extend((c_array("u16",prefix+"_height_grid",terrain["height_grid"]),
                     c_array("s16",prefix+"_planes",[v for p in terrain["height_planes"] for v in p]),
                     c_array("u16",prefix+"_surface_grid",terrain["surface_grid"]),
                     c_array("u8",prefix+"_surface_tiles",terrain["surface_tiles"],32)))
-        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']} }},")
+        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']}, {', '.join(map(str, road_bounds))} }},")
         stats.append(dict(name=course["name"],source_sections=len(sections),
                           source_polygons=course["polygon_count"],rendered_polygons=len(faces),
                           unique_polygons=len(identities),duplicate_polygons=len(faces)-len(identities),
-                          source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"]))
+                          source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"],
+                          source_asphalt_bounds_gba=list(road_bounds)))
     out.append("static const VrOriginalCourse vr_original_courses[3] = {")
     out.extend(descriptors);out.extend(("};","#endif",""))
     return "\n".join(out), stats
