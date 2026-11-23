@@ -101,6 +101,26 @@ s32 track_half_width(s32 seg)
         ? g_track->half_widths[seg] : TRACK_HALF_W;
 }
 
+// A route-node's left and right original asphalt widths can differ
+// substantially, especially at turnouts and pits. Keep the narrowest
+// legacy racing lane, but distinguish a *genuine* wide side of the original
+// main route from an unrelated original pit branch. Widths live in the
+// private generated ROM-only track header.
+s32 track_native_half_width(s32 seg,s32 signed_lateral)
+{
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original=original_course();
+    if(original>=0 && seg>=0 && seg<g_track->count &&
+       seg<vr_native_route_counts[original])
+        return signed_lateral<0
+            ? vr_native_left_widths[original][seg]
+            : vr_native_right_widths[original][seg];
+#else
+    (void)signed_lateral;
+#endif
+    return track_half_width(seg);
+}
+
 static inline s32 barrier(const TrackPt *p)
 {
     return track_half_width(p - g_track->pts) + p->verge;
