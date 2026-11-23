@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from decode_vrd_32x_surface import RoadSurface, test_bsp_group
 from inspect_vrd_32x_tables import ROM_SHA256, inspect_image
-from export_vrd32x_exact_bsp import vector_svg
+from export_vrd32x_exact_bsp import collision_obj, vector_svg
 from vrd32x_exact_bsp import (audit_mode_group_identity, contains,
                               clipped_polygon, first_group, group_halfplanes,
                               mode_polygon_bounds, signed_area, tile_regions,
@@ -129,6 +129,14 @@ class ExactBspHalfplanes(unittest.TestCase):
         self.assertEqual(svg.count("<polygon points="),2)
         self.assertEqual(stats["nondegenerate_vector_footprints"],2)
         self.assertFalse(stats["named_deluxe_course_verified"])
+        native_obj, mesh_stats = collision_obj(source)
+        self.assertIn("NOT SH-2 RENDER MESH",native_obj)
+        self.assertIn("\nv ",native_obj)
+        self.assertIn("\nf ",native_obj)
+        self.assertEqual(mesh_stats["priority_resolved_collision_polygons"],2)
+        self.assertFalse(mesh_stats["native_vertical_scale_verified"])
+        with self.assertRaises(ValueError):
+            collision_obj(source,height_divisor=0)
         with self.assertRaises(ValueError):
             tile_regions(source,64,0)
 
