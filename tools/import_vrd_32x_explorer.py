@@ -30,6 +30,7 @@ try:
     from tools.vrd32x_layered_course import layered_main_cycle
     from tools.vrd32x_course_identity import verify_course_identity, COURSE_NAMES
     from tools.vrd32x_native_routes import original_source_route
+    from tools.vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface, signed16
     from export_vrd_32x_surface_mesh import grid_samples
@@ -39,6 +40,7 @@ except ModuleNotFoundError:
     from vrd32x_layered_course import layered_main_cycle
     from vrd32x_course_identity import verify_course_identity, COURSE_NAMES
     from vrd32x_native_routes import original_source_route
+    from vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
 
 GAME_WORLD = 16384
 HEIGHT_DIV = 32  # VISUAL/PHYSICS CALIBRATION ONLY; native units unverified
@@ -49,7 +51,7 @@ MAX_POINTS = 254  # GBA route segment indexes are u8; original 32X longest has 2
 # Respect the real course themes using EXISTING lightweight GBA scenes.
 # These are GBA approximations, NOT original Sega SH-2 scenery polygons.
 SOURCE_SCENES = ('SCENE_FOREST', 'SCENE_BAY', 'SCENE_MOUNTAINS',
-                 'SCENE_FOREST', 'SCENE_MOUNTAINS')
+                 'SCENE_HIGHLAND', 'SCENE_DESERT')
 
 
 def skeleton_route(mask):
@@ -216,6 +218,7 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
     routes=['// PRIVATE GENERATED source-ROM-derived approximate staging loops. Do NOT commit.']
     defs=[];lookups=[];heights_all=[];statistics=[];road_bounds=[];previews=[]
     mesh_firsts=[];mesh_counts=[];meshes=[]
+    terrain_heights=[];terrain_covers=[];scenery_names=[];scenery_counts=[]
     for slot in range(5):
         surface=RoadSurface(source,slot,verify_identity=False)
         side,samples=grid_samples(surface,ROAD_SUBDIV)
@@ -282,6 +285,23 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
             source,slot,surface,bridge_surface,minimum,distmap,bridge_dist,
             pitch=PIXEL_WORLD,max_points=MAX_POINTS)
         bridge_report=source_route_audit if bridge_surface is not None else None
+        # The 68000 contributes native road heights/widths; all offroad
+        # relief and unverified course landmarks are authored GBA visuals.
+        # Both remain immutable ROM arrays, never frame-allocated geometry.
+        relief,cover,props=terrain_from_source(samples,SIDE,minimum,slot,route)
+        height_name=f'vrd_native_terrain_height_{slot}'
+        cover_name=f'vrd_native_terrain_cover_{slot}'
+        prop_name=f'vrd_native_scenery_{slot}'
+        terrain_heights.append(height_name)
+        terrain_covers.append(cover_name)
+        scenery_names.append(prop_name)
+        scenery_counts.append(len(props))
+        data.append(c_array('u16',height_name,relief,18))
+        data.append(c_array('u8',cover_name,cover,28))
+        data.append(c_array('u8',f'vrd_native_ribbon_skip_{slot}',ribbon_overdraw_skip(route),32))
+        data.append('static const VrdScenery '+prop_name+'['+str(len(props))+
+                    '] = {\n'+',\n'.join('    { '+', '.join(map(str,item))+
+                        ' }' for item in props)+'\n};')
         first,count,flat=grid_lists(route)
         if exact_mesh:
             exact_first,exact_counts,exact_tris=exact_collision_tris(surface,minimum)
@@ -360,6 +380,9 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                                original_68000_ordered_main_road=source_route_audit,
                                original_ordered_route_verified=True,
                                approximate_gba_scene_name=SOURCE_SCENES[slot],
+                               extrapolated_native_road_terrain_grid='65x65_u16_ROMonly',
+                               source_collision_anchored_gba_visual_props=len(props),
+                               original_sh2_terrain_and_props_recovered=False,
                                original_sh2_scenery_verified=False,
                                original_start_finish_verified=False,
                                layered_alternate_68000_source_route=bridge_report,
@@ -373,6 +396,16 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                 '    ' + (',' + chr(10) + '    ').join(
                     '{ '+', '.join(map(str, b))+' }' for b in road_bounds) +
                 chr(10) + '};')
+    data.append('#define VRD_NATIVE_SCENE 1')
+    data.append('static const u16 *const vrd_native_terrain_height[5] = { '+
+                ', '.join(terrain_heights)+' };')
+    data.append('static const u8 *const vrd_native_terrain_cover[5] = { '+
+                ', '.join(terrain_covers)+' };')
+    data.append('static const u8 *const vrd_native_ribbon_skip[5] = { '+
+                ', '.join(f'vrd_native_ribbon_skip_{i}' for i in range(5))+' };')
+    data.append('static const VrdScenery *const vrd_native_scenery[5] = { '+
+                ', '.join(scenery_names)+' };')
+    data.append(c_array('u8','vrd_native_scenery_count',scenery_counts,16))
     if exact_mesh:
         data.append('#define VRD_EXACT_SOURCE_MESH 1')
         data.append('static const u16 *const vrd_exact_first[5] = { '+', '.join(mesh_firsts)+' };')

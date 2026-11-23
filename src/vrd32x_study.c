@@ -5,6 +5,9 @@
 #include "world.h"
 #include "vrd32x_study.h"
 typedef struct { s16 xyz[9]; } VrdSourceTri;
+// Generated ROM-only props are anchored to authenticated source road
+// coordinates. They are adapted GBA scenery, not original Sega SH-2 meshes.
+typedef struct { s16 x,y,z,ux,uz; u8 kind,size; } VrdScenery;
 #include "vrd32x_study_data.h"  // privately generated, ignored by Git
 
 s32 vrd32x_study_slot(void)
@@ -155,17 +158,174 @@ static void ground_quad(s32 x,s32 z,s32 step,s32 y0,s32 y1,s32 y2,s32 y3,u8 colo
     r_ground(v,4,color);
 }
 
+#ifdef VRD_NATIVE_SCENE
+// Flat checkerboard planes had hidden the real source road. Ground vertices
+// now come from source-collision-height-anchored landscape data, not 0.
+// Only the off-road extrapolation and vegetation are artistic approximations.
+static s32 terrain_vertex(s32 slot,s32 col,s32 row)
+{
+    if((u32)col>=65 || (u32)row>=65)return 0;
+    return vrd_native_terrain_height[slot][row*65+col];
+}
+
+static u8 terrain_color(s32 slot,s32 col,s32 row)
+{
+    if((u32)col>=64 || (u32)row>=64)return COLOR(M_GRASS,1);
+    u8 kind=vrd_native_terrain_cover[slot][row*64+col];
+    if(kind==3)return COLOR(M_WATER,0);
+    if(kind==2)return COLOR(M_BLD4,1);
+    if(kind==5)return COLOR(M_BLD5,1);
+    if(kind==1)return COLOR(M_SIDEWALK,2);
+    return kind==4 ? COLOR(M_GRASS,2) : COLOR(M_GRASS,0);
+}
+
+// Two crossed conifer silhouettes use a handful of faces and no asset RAM.
+// The shapes are original compact GBA representations, not original meshes.
+static void draw_native_scenery(const VrdScenery *p,s32 depth)
+{
+    s32 x=p->x,y=p->y,z=p->z;
+    s32 size=p->size;
+    if(p->kind==0 || p->kind==1){
+        s32 h=size*2,wide=size/2;
+        Vec3 a[3]={{x,y+h,z},{x-wide,y+15,z},{x+wide,y+15,z}};
+        Vec3 b[3]={{x,y+h,z},{x,y+15,z-wide},{x,y+15,z+wide}};
+        r_face(a,3,COLOR(M_TREE,p->kind?2:0),RF_TWO_SIDED);
+        r_face(b,3,COLOR(M_TREE,p->kind?1:2),RF_TWO_SIDED);
+        if(depth<330)r_box(x-4,y,z-4,x+4,y+32,z+4,M_BLD1);
+    }else if(p->kind==2){  // compact source-course-inspired dock structure
+        r_box(x-size,y,z-size/2,x+size,y+35+size/2,z+size/2,M_BLD2);
+        if(depth<550)r_box(x-size/2,y+35+size/2,z-size/2,
+                           x+size/2,y+40+size/2,z+size/2,M_SIDEWALK);
+    }else if(p->kind==3){  // harbour crane, single silhouetted gantry
+        r_box(x-6,y,z-6,x+6,y+size*3,z+6,M_BLD4);
+        r_box(x-8,y+size*3-10,z-size,x+8,y+size*3+4,z+size/2,M_BLD4);
+    }else if(p->kind==4){  // granite/ochre rock outcrop
+        s32 w=size/2;
+        Vec3 a[3]={{x,y+size*2,z},{x-w,y,z-w},{x+w,y,z-w}};
+        Vec3 b[3]={{x,y+size*2,z},{x+w,y,z-w},{x+w,y,z+w}};
+        Vec3 c[3]={{x,y+size*2,z},{x+w,y,z+w},{x-w,y,z+w}};
+        r_face(a,3,COLOR(M_BLD5,0),RF_TWO_SIDED);
+        r_face(b,3,COLOR(M_BLD5,1),RF_TWO_SIDED);
+        r_face(c,3,COLOR(M_BLD4,2),RF_TWO_SIDED);
+    }else if(p->kind==5){ // weathered stone remnants
+        s32 w=size/2;
+        r_box(x-w,y,z-8,x-w+12,y+size,z+8,M_BLD3);
+        r_box(x+w-12,y,z-8,x+w,y+size,z+8,M_BLD3);
+        r_box(x-w-9,y+size-3,z-11,x+w+9,y+size+12,z+11,M_BLD4);
+    }else if(p->kind==6){ // small fairground observation wheel
+        s32 h=size*2,rad=size*3/4;
+        r_box(x-6,y,z-6,x+6,y+h,z+6,M_BLD4);
+        // Eight simple ring spokes in the X/Y plane, no framebuffer sprites.
+        for(s32 i=0;i<8;i++){
+            s32 a=i*128,b=(i+1)*128;
+            s32 ax=(icos(a)*rad)>>14,ay=(isin(a)*rad)>>14;
+            s32 bx=(icos(b)*rad)>>14,by=(isin(b)*rad)>>14;
+            Vec3 tri[3]={{x,y+h,z},{x+ax,y+h+ay,z},
+                         {x+bx,y+h+by,z}};
+            r_face(tri,3,COLOR(M_STUNT_RED,i&1),RF_TWO_SIDED);
+        }
+    }else if(p->kind==7){ // monumental cliff-side temple outline
+        s32 w=size,h=size*3/2;
+        r_box(x-w,y,z-32,x-w+18,y+h,z-12,M_BLD3);
+        r_box(x+w-18,y,z-32,x+w,y+h,z-12,M_BLD3);
+        r_box(x-w-16,y+h-8,z-45,x+w+16,y+h+20,z+8,M_BLD4);
+    }else if(p->kind==8){ // sandstone escarpment from large triangular faces
+        s32 w=size/2;
+        Vec3 a[3]={{x,y+size*3,z},{x-w,y,z-w},{x+w,y,z-w}};
+        Vec3 b[3]={{x,y+size*3,z},{x+w,y,z-w},{x+w,y,z+w}};
+        Vec3 c[3]={{x,y+size*3,z},{x+w,y,z+w},{x-w,y,z+w}};
+        r_face(a,3,COLOR(M_BLD4,0),RF_TWO_SIDED);
+        r_face(b,3,COLOR(M_BLD5,1),RF_TWO_SIDED);
+        r_face(c,3,COLOR(M_BLD4,2),RF_TWO_SIDED);
+    }else if(p->kind==9){ // source-tangent-aligned crossing/bridge silhouette
+        // Decorations are non-collidable until exact SH-2 bridge assets can
+        // replace these GBA stand-ins. The route position is authentic.
+        s32 w=size;
+        s32 offx=-(p->uz*w)>>14,offz=(p->ux*w)>>14;
+        s32 lx=x+offx,lz=z+offz,rx=x-offx,rz=z-offz;
+        s32 h=y+size*2;
+        r_box(lx-10,y,lz-10,lx+10,h,lz+10,M_BLD4);
+        r_box(rx-10,y,rz-10,rx+10,h,rz+10,M_BLD4);
+        Vec3 beam[4]={{lx,h-18,lz},{rx,h-18,rz},
+                      {rx,h+8,rz},{lx,h+8,lz}};
+        r_face(beam,4,COLOR(M_BLD4,0),RF_TWO_SIDED);
+    }
+}
+
+// Original ordered signed-X/Z road points (not a procedural skeleton). The
+// ribbons are conservative interiors of the source road and use original
+// source heights; outlying asphalt still uses the 68000 collision raster.
+static void draw_native_source_road(s32 slot)
+{
+    const TrackDef *t=g_track;
+    if(!t || !t->half_widths)return;
+    s32 drawn=0,edges=0;
+    for(s32 i=0;i<t->count && drawn<24;i++){
+        const TrackPt *a=&t->pts[i],*b=&t->pts[i+1==t->count?0:i+1];
+        s32 mx=(a->x+b->x)/2,mz=(a->z+b->z)/2;
+        if(!r_visible(mx,mz,180+a->len/2))continue;
+        s32 wa=(t->half_widths[i]*3)/4;
+        s32 wb=(t->half_widths[i+1==t->count?0:i+1]*3)/4;
+        if(wa>110)wa=110;
+        if(wb>110)wb=110;
+        if(wa<14)wa=14;
+        if(wb<14)wb=14;
+        Vec3 v[4]={
+            {a->x-((a->uz*wa)>>14),a->y+3,a->z+((a->ux*wa)>>14)},
+            {b->x-((b->uz*wb)>>14),b->y+3,b->z+((b->ux*wb)>>14)},
+            {b->x+((b->uz*wb)>>14),b->y+3,b->z-((b->ux*wb)>>14)},
+            {a->x+((a->uz*wa)>>14),a->y+3,a->z-((a->ux*wa)>>14)}
+        };
+        s32 delta=a->y-b->y;
+        if(delta<0)delta=-delta;
+        r_ground(v,4,COLOR(M_ASPHALT,delta>36?1:0));
+        drawn++;
+        // Quiet lane-edge marks instead of noisy checkerboard road paint.
+        // Existing map has no verified original finish line or lane count.
+        if(edges<5 && r_visible(mx,mz,110) && a->len<350){
+            Vec3 line[4]={{v[0].x,v[0].y+2,v[0].z},
+                          {v[1].x,v[1].y+2,v[1].z},
+                          {v[1].x+((b->uz*4)>>14),v[1].y+2,v[1].z-((b->ux*4)>>14)},
+                          {v[0].x+((a->uz*4)>>14),v[0].y+2,v[0].z-((a->ux*4)>>14)}};
+            r_ground(line,4,COLOR(M_STUNT_WHITE,1));
+            edges++;
+        }
+    }
+    (void)slot;
+}
+#endif
+
 void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
 {
     (void)frame;
-    // Low-detail environmental ground, budgeted independently of the road.
-    // Use a small number of 256-unit quads, not a framebuffer or heap mesh.
-    s32 bx=(focus_x/256)*256-512,bz=(focus_z/256)*256-512;
-    for(s32 iz=0;iz<5;iz++) for(s32 ix=0;ix<5;ix++) {
-        s32 x=bx+ix*256,z=bz+iz*256;
-        if (!r_visible(x+128,z+128,190)) continue;
-        ground_quad(x,z,256,0,0,0,0,COLOR(M_GRASS,(ix+iz)&1));
+#ifdef VRD_NATIVE_SCENE
+    // Terrain is a continuous height mesh keyed to the original 68000
+    // road height data; no chessboard tiles or flat zero-height fields.
+    // 512-unit world-space LOD reaches over a kilometer to either side
+    // without extra terrain faces; 256-unit checker tiles ended halfway to
+    // the horizon and were plainly visible as flat rectangles.
+    s32 col0=focus_x/512-2,row0=focus_z/512-2;
+    for(s32 rz=0;rz<5;rz++)for(s32 rx=0;rx<5;rx++){
+        s32 col=col0+rx,row=row0+rz;
+        if((u32)col>=32 || (u32)row>=32)continue;
+        s32 x=col*512,z=row*512;
+        if(!r_visible(x+256,z+256,350))continue;
+        s32 gx=col*2,gz=row*2;
+        ground_quad(x,z,512,
+          terrain_vertex(slot,gx,gz),
+          terrain_vertex(slot,gx,gz+2),
+          terrain_vertex(slot,gx+2,gz+2),
+          terrain_vertex(slot,gx+2,gz),terrain_color(slot,gx,gz));
     }
+#else
+    // Compatibility for synthetic fixtures and older, donor-less maps.
+    s32 bx=(focus_x/256)*256-512,bz=(focus_z/256)*256-512;
+    for(s32 iz=0;iz<5;iz++)for(s32 ix=0;ix<5;ix++){
+        s32 x=bx+ix*256,z=bz+iz*256;
+        if(!r_visible(x+128,z+128,190))continue;
+        ground_quad(x,z,256,0,0,0,0,COLOR(M_GRASS,1));
+    }
+#endif
     s32 exact_faces=0;
 #ifdef VRD_EXACT_SOURCE_MESH
     // Native 68000 BSP surface triangles, clipped to source boundaries and
@@ -235,8 +395,17 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
     // Max 19x19 candidates, <=180 surface faces, bounded render queue.
     s32 base_x=(focus_x/64)*64-576,base_z=(focus_z/64)*64-576;
     s32 faces=exact_faces;
-    for(s32 j=0;j<18 && faces<180;j++)for(s32 i=0;i<18 && faces<180;i++){
+    for(s32 j=0;j<18 && faces<(slot==2||slot==3?110:140);j++)
+        for(s32 i=0;i<18 && faces<(slot==2||slot==3?110:140);i++){
         s32 x=base_x+i*64,z=base_z+j*64;
+#ifdef VRD_NATIVE_SCENE
+        // Original ordered native-road ribbons already cover these cells.
+        // Skip duplicate fill entirely, but do NOT erase pit/branch asphalt.
+        if((u32)x<16384 && (u32)z<16384){
+            u32 rc=(u32)(z>>6)*256+(u32)(x>>6);
+            if(vrd_native_ribbon_skip[slot][rc>>3] & (1u<<(rc&7)))continue;
+        }
+#endif
 #ifdef VRD_EXACT_SOURCE_MESH
         // Close-up original BSP triangles replace, not overlay, coarse
         // road patches. Preserve the 180-face source-road display cap.
@@ -269,6 +438,21 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
             if(n==3){r_ground(tri,3,mat);faces++;}
         }
     }
+#ifdef VRD_NATIVE_SCENE
+    draw_native_source_road(slot);
+    // Props are submitted after immediate ground/road, but the renderer's
+    // existing solid-face depth sort handles their true height and occlusion.
+    s32 drawn_props=0;
+    const VrdScenery *props=vrd_native_scenery[slot];
+    for(s32 i=0;i<vrd_native_scenery_count[slot] && drawn_props<5;i++){
+        const VrdScenery *p=&props[i];
+        if(!r_visible(p->x,p->z,p->size*2+40))continue;
+        s32 side,depth=r_depth(p->x,p->z,&side);
+        if(depth>900 || depth<0 || r_faces_free()<48)continue;
+        draw_native_scenery(p,depth);
+        drawn_props++;
+    }
+#endif
 }
 
 static void map_pixel(volatile u16 *page,s32 x,s32 y,u8 color)
