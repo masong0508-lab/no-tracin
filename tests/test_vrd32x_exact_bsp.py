@@ -110,25 +110,26 @@ class ExactBspHalfplanes(unittest.TestCase):
                         return type("Hit", (), {"group": i})()
                 return None
         Source.grid[0] = 0
-        regions = tile_regions(Source,0,0)
+        source = Source()
+        regions = tile_regions(source,0,0)
         self.assertEqual(len(regions),2)
         self.assertEqual(first_group(regions,100,80),0)
         self.assertEqual(first_group(regions,400,80),1)
         self.assertEqual(first_group(regions,-1,80),None)
-        self.assertEqual(tile_regions(Source,0,1),())
-        self.assertEqual(mode_polygon_bounds(Source), (0,320,0,320))
-        audit = audit_mode_group_identity(Source,sample_points=(0,63,255,383,511))
+        self.assertEqual(tile_regions(source,0,1),())
+        self.assertEqual(mode_polygon_bounds(source), (0,320,0,320))
+        audit = audit_mode_group_identity(source,sample_points=(0,63,255,383,511))
         self.assertTrue(audit["first_match_source_parity"])
         self.assertEqual(audit["sample_points_verified"],25)
         self.assertEqual(audit["active_source_tiles"],1)
-        svg, stats = vector_svg(Source)
+        svg, stats = vector_svg(source)
         self.assertIn("source BSP road footprints",svg)
         self.assertIn('viewBox="0 0 16384 16384"',svg)
         self.assertEqual(svg.count("<polygon points="),2)
         self.assertEqual(stats["nondegenerate_vector_footprints"],2)
         self.assertFalse(stats["named_deluxe_course_verified"])
         with self.assertRaises(ValueError):
-            tile_regions(Source,64,0)
+            tile_regions(source,64,0)
 
     def test_truncated_or_invalid_geometry_fails_closed(self):
         with self.assertRaises(ValueError):
