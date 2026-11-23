@@ -12,6 +12,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / 'tools'))
+from vrd32x_map_geometry import sampled_preview_bits
 
 
 class RoadStudyTerrainTests(unittest.TestCase):
@@ -24,6 +27,17 @@ class RoadStudyTerrainTests(unittest.TestCase):
             header = temp / 'gba_host.h'
             header.write_text((ROOT/'src/gba.h').read_text().replace('target("arm"), ', ''))
             heights = [10 + 4 * row + 3 * col for row in range(8) for col in range(8)]
+            # The five optional-mode menu thumbnails are generated from
+            # the same synthetic source mask as the production C fake tile.
+            mask0 = [False] * (512 * 512)
+            mask2 = [False] * (512 * 512)
+            for row in range(8):
+                for col in range(8):
+                    mask0[row * 512 + col] = True
+                    mask2[row * 512 + col] = not (row < 4 and col < 4)
+            thumb0 = sampled_preview_bits(mask0, (0, 255, 0, 255))
+            thumb2 = sampled_preview_bits(mask2, (0, 255, 0, 255))
+            self.assertEqual(len(thumb0), len(thumb2))
             tile = temp / 'vrd32x_study_data.h'
             tile.write_text('''// SYNTHETIC ONLY. Sampled genuine source data is never committed.
 static const u16 test_tile[4096] = { [0] = 1 };
@@ -35,6 +49,11 @@ static const u16 *const vrd_study_heights[5] = { test_h, test_h2, test_h3, test_
 static const u16 vrd_study_preview_bounds[5][4] = {
   {0,255,0,255}, {0,255,0,255}, {0,255,0,255},
   {0,255,0,255}, {0,255,0,255}
+};
+static const u8 source_thumb0[867] = { ''' + ','.join(map(str, thumb0)) + ''' };
+static const u8 source_thumb2[867] = { ''' + ','.join(map(str, thumb2)) + ''' };
+static const u8 *const vrd_study_preview_bits[5] = {
+  source_thumb0, source_thumb0, source_thumb2, source_thumb0, source_thumb0
 };
 ''')
             fixture = temp / 'verify.c'
@@ -96,6 +115,14 @@ int main(void) {
     assert(MAP_PIXEL(110,35)==5);
     vrd32x_study_map(map_page,0,10,10,128,128,7);
     assert(MAP_PIXEL(32,110)==7); // true source coverage, not inherited hole
+    for(s32 i=0;i<SCREEN_W*SCREEN_H/2;i++)map_page[i]=0;
+    // The fixed 102x68 animated course menu must use only the ROM bitmap,
+    // including authentic source-mask gaps despite no per-pixel tile reads.
+    vrd32x_study_map(map_page,2,10,10,102,68,8);
+    assert(MAP_PIXEL(40,60)==0);  // unsupported lower-left
+    assert(MAP_PIXEL(40,30)==8);  // supported upper-left
+    assert(MAP_PIXEL(80,60)==8);  // supported lower-right
+    assert(MAP_PIXEL(80,30)==8);  // supported upper-right
     return 0;
 }
 ''')
