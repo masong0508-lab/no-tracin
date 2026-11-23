@@ -18,7 +18,8 @@ from inspect_vrd_32x_tables import ROM_SHA256, inspect_image
 from export_vrd32x_exact_bsp import vector_svg
 from vrd32x_exact_bsp import (audit_mode_group_identity, contains,
                               clipped_polygon, first_group, group_halfplanes,
-                              mode_polygon_bounds, signed_area, tile_regions)
+                              mode_polygon_bounds, signed_area, tile_regions,
+                              tile_priority_faces)
 
 
 def synthetic_group(branches):
@@ -130,6 +131,40 @@ class ExactBspHalfplanes(unittest.TestCase):
         self.assertFalse(stats["named_deluxe_course_verified"])
         with self.assertRaises(ValueError):
             tile_regions(source,64,0)
+
+    def test_overlapping_native_regions_partition_by_original_height_priority(self):
+        # Region 0 covers x_word < 400, region 1 covers x_word < 700.
+        # The later region MUST be cut to the right of the first one;
+        # otherwise conflicting source height planes overlap on the road.
+        first=synthetic_group([(0,1,0,400,0), ALL, ALL, ALL])
+        second=synthetic_group([(0,1,0,700,0), ALL, ALL, ALL])
+        class Synthetic:
+            rom=b"\x00\x01"+first+second+b"\xff\xff"
+            grid=[29]*(64*64)
+            background=29
+            bank_start=0
+            limit_word=29
+        Synthetic.grid[0]=0
+        faces=tile_priority_faces(Synthetic,0,0)
+        self.assertEqual({p.group for p in faces},{0,1})
+        self.assertEqual(len(faces),2)
+        area=sum((signed_area(f.polygon) for f in faces),start=0)
+        expected=signed_area(tile_regions(Synthetic,0,0)[1].polygon)
+        self.assertEqual(area,expected)
+
+        def in_poly(poly,x,z):
+            for (ax,az),(bx,bz) in zip(poly,poly[1:]+poly[:1]):
+                if (bx-ax)*(z-az)-(bz-az)*(x-ax)<0:
+                    return False
+            return True
+        for x in range(10,511,9):
+            for z in (25,100,250,400):
+                actual=[p.group for p in faces if in_poly(p.polygon,x,z)]
+                want=0 if x<200 else 1 if x<350 else None
+                self.assertEqual(actual,[want] if want is not None else [],
+                                 (x,z,actual))
+        with self.assertRaises(ValueError):
+            tile_priority_faces(Synthetic,0,0,max_faces=1)
 
     def test_truncated_or_invalid_geometry_fails_closed(self):
         with self.assertRaises(ValueError):
