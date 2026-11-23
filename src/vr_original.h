@@ -32,6 +32,9 @@ typedef struct {
     // Source asphalt-mask bounds, generated privately. Includes pits and
     // side roads omitted by the main-race-centreline preview.
     u16 road_min_x, road_max_x, road_min_z, road_max_z;
+    // Generated only from the authenticated source asphalt bitmap.
+    // Exactly 102x68/8 packed road pixels per imported course, ROM-only.
+    const u8 *preview_bits;
 } VrOriginalCourse;
 
 void vr_original_draw(s32 course, s32 focus_x, s32 focus_z, s32 frame);
