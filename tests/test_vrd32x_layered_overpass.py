@@ -23,6 +23,7 @@ class NativeOverpassTests(unittest.TestCase):
 #define VRD_TILE_SHIFT 4
 #define VRD_TILE_AREA 256
 #define VRD_HAS_NATIVE_OVERPASS 1
+static const u16 vrd_native_bridge_bounds[4]={0,511,0,511};
 static const u16 grid[4096] = {[0]=1};
 static const u16 lower[256] = {[0 ... 255]=72};
 static const u16* const vrd_study_lookups[5]={grid,grid,grid,grid,grid};

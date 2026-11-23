@@ -193,7 +193,11 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
     // The upper bridge is visible from the true lower underpass.
     // Reserve <=24 existing road faces. Source upper tiles are in ROM;
     // no extra framebuffer, heap, RAM cache or per-frame mesh build.
-    if(slot==3){
+    if(slot==3 &&
+       focus_x+512>=vrd_native_bridge_bounds[0] &&
+       focus_x-512<=vrd_native_bridge_bounds[1] &&
+       focus_z+512>=vrd_native_bridge_bounds[2] &&
+       focus_z-512<=vrd_native_bridge_bounds[3]){
         s32 bridge_faces=0;
         s32 start_x=(focus_x/64)*64-256,start_z=(focus_z/64)*64-256;
         for(s32 iz=0;iz<8 && bridge_faces<24 && exact_faces<180;iz++)

@@ -3,6 +3,9 @@
 #include "race.h"
 #include "track.h"
 #include "world.h"
+#ifdef WITH_VRD_32X_TRACKS
+#include "vrd32x_study.h"
+#endif
 #include "game.h"
 #include "hud.h"
 #include "menu.h"
@@ -231,6 +234,12 @@ void race_begin(s32 track, s32 mode, Car *player)
     grid_slot(slot, &d, &lat);
     if (mode != RACE_ARCADE) lat = 0;
     track_point(d, lat, &x, &z, &y, &h, &hint);
+#ifdef WITH_VRD_32X_TRACKS
+    // If a course starts on an upper native plane, use its source route
+    // elevation BEFORE car_reset queries world_height for initial contact.
+    if(track>=TRACK_VRD_FIRST)
+        vrd32x_study_set_height_reference(y*256);
+#endif
     car_reset(player, x, z, h);
     g->progress = d;
     g->last_d = d + t->lap;

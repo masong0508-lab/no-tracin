@@ -21,6 +21,11 @@ const TrackDef g_tracks[TRACK_COUNT] = {
 #endif
 };
 const TrackDef *g_track;
+#ifdef WITH_VRD_32X_TRACKS
+// Route fixture has no private generated original source height data.
+s32 vrd32x_study_slot(void){return -1;}
+void vrd32x_study_set_height_reference(s32 h){(void)h;}
+#endif
 s16 track_pitch[256];
 #ifdef WITH_VR_ORIGINAL_TRACKS
 const u32 g_vr_original_pack_version = 0x11223344;

@@ -288,6 +288,15 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                 if all(h==65535 for h in sub):alt_lookup.append(0)
                 else:
                     alt_active.append(cell);alt_lookup.append(len(alt_active));alt_tiling+=sub
+            coords=np.argwhere(bridge_mask)
+            minz,minx=coords.min(axis=0);maxz,maxx=coords.max(axis=0)
+            # Only four ROM bounds; skip pointless alternate road draw
+            # sampling when Highland's car is away from its real bridge.
+            data.append('static const u16 vrd_native_bridge_bounds[4] = {'+
+                        ', '.join(map(str,(int(minx)*PIXEL_WORLD,
+                                           int(maxx+1)*PIXEL_WORLD-1,
+                                           int(minz)*PIXEL_WORLD,
+                                           int(maxz+1)*PIXEL_WORLD-1)))+'};')
             data.append('#define VRD_HAS_NATIVE_OVERPASS 1')
             data.append(c_array('u16','vrd_native_overpass_lookup',alt_lookup,16))
             data.append(c_array('u16','vrd_native_overpass_heights',alt_tiling,16))

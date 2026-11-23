@@ -102,3 +102,31 @@ the above actual Sega-source race completion gates are met.
 **Privacy:** Source ROM bytes, all original-derived height grids and
 full imported 32X polygon assets remain exclusively in the user's
 private ZIP or ignored working build directory, not in public GitHub.
+
+## Final owner-private performance and build checkpoint
+
+The complete original-owner-only importer was rerun at 16 samples per
+68000 source cell. It generated a source bridge bounding rectangle of
+GBA-world x=6160..8575, z=6416..6879. The renderer now skips extra
+overpass tile probes when the car is more than 512 GBA units away.
+The source-mode3 start elevation is seeded from the native layered
+route before car_reset selects the surface plane.
+
+**Final recommended owner-private GBA build**: 1,584,692 bytes,
+SHA-256 `05022ec4d05219bbac4f601e87b132d2c4cdf66121486938bee453109fd36305`,
+compiled GNU ARM, overpass preserved.
+
+All five ROM-backed source-road Free Drives passed controller-only mGBA
+smoke (760 emulated video frames per slot, no emulator fatal/error):
+mode 0 19.0185; mode 1 19.8830; mode 2 24.8341;
+mode 3 **19.8830** (previous unbounded bridge preview 17.9183);
+mode 4 22.7122. Rates are game displayed FPS during short matched
+controller paths, not original 32X rendering or full-game worst case.
+
+18 focused native 32X source/BSP/regression tests passed with the
+original owner cartridge; a separate compiled host C program using
+the **actual private generated ROM data** verified that the upper
+and lower plane both return physically distinct correct heights at
+(7984,6608), and upper-only source road at (6432,6416) stays drivable.
+The original Sega course-name mapping, SH-2 scenery, true start/finish,
+and original native race AI/checkpoints remain unverified.
