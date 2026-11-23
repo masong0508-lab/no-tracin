@@ -152,13 +152,24 @@ static void map_pixel(volatile u16 *page,s32 x,s32 y,u8 color)
 
 void vrd32x_study_map(volatile u16 *page,s32 slot,s32 x0,s32 y0,s32 w,s32 h,u8 color)
 {
-    // Grounded to source 64x64 tile layout, including all branches; this
-    // does not pretend that a skeletal staging route is an actual lap.
+    // The old preview filled every 64x64 grid tile even when its sampled
+    // source BSP mask only covered a sliver. That invents fake wide roads,
+    // conceals branches and connects gaps. Each tile is already eight by
+    // eight authenticated samples: display only 4x4 quadrants containing
+    // at least one on-road sample. No extra data, RAM or staging-line use.
+    if((u32)slot>=TRACK_VRD_COUNT || w<=0 || h<=0)return;
     for(s32 row=0;row<64;row++)for(s32 col=0;col<64;col++){
         s32 id=vrd_study_lookups[slot][row*64+col];
         if(!id)continue;
+        const u16 *tile=vrd_study_heights[slot]+(id-1)*64;
         for(s32 dy=0;dy<2;dy++)for(s32 dx=0;dx<2;dx++){
-            s32 px=x0+(col*w)/64+dx,py=y0+(row*h)/64+dy;
+            s32 found=0;
+            for(s32 sy=dy*4;sy<dy*4+4 && !found;sy++)
+                for(s32 sx=dx*4;sx<dx*4+4;sx++)
+                    if(tile[sy*8+sx]!=65535){found=1;break;}
+            if(!found)continue;
+            s32 px=x0+((col*2+dx)*w)/128;
+            s32 py=y0+((row*2+dy)*h)/128;
             map_pixel(page,px,py,color);
         }
     }
