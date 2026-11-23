@@ -103,3 +103,11 @@ $(VRD_BUILD)/%.o: src/%.c $(wildcard src/*.h) $(VRD_HEADERS) | $(VRD_BUILD)
 
 $(VRD_BUILD):
 	mkdir -p $@
+
+# Source-authenticated 32X collision boundary evidence; NOT a playable
+# named-course import or SH-2 scenery mesh reconstruction. Files stay private
+# under ignored build/ and are generated from the owner's unmodified ROM.
+.PHONY: vr32x-original-bsp-evidence
+vr32x-original-bsp-evidence:
+	@test -n "$(VR32X_ROM)" || (echo 'Supply VR32X_ROM="/path/to/Virtua Racing Deluxe 32X (U).bin"' >&2; exit 2)
+	python3 tools/export_vrd32x_exact_bsp.py --rom "$(VR32X_ROM)" --out-dir build/vrd32x-bsp
