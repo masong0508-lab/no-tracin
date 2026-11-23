@@ -19,6 +19,11 @@ the pit lane, and a recovery pose on the central spline.
 On the imported **Genesis original** tracks only, an on-asphalt pose
 farther than the sampled main-route half-width is now treated as
 **native side-road exploration**:
+- Each original route node now preserves *both* source-derived
+  left/right asphalt half-widths as **ROM-only per-side arrays**. The original
+  racing/AI corridor continues using the existing conservative minimum.
+  Side-road detection uses the correct native side, plus a 16-unit margin to
+  avoid classifying wide legitimate lanes as pit branches.
 - No credit is awarded through an unrelated main-route projection.
 - No WRONG WAY warning is generated from an unknown pit-lane tangent.
 - Every 16 physics ticks (and on ground), a recovery pose is stored at the
@@ -61,12 +66,14 @@ No new runtime framebuffer, heap, polygon list or large RAM cache is added.
 ## Verification and release gates
 
 Synthetic source-only tests verify:
-1. Exact source-mask rectangular extents with margins, clipping at world
+1. Original left/right source widths are preserved through private optional
+   course header generation, rather than collapsed into one width.
+2. Exact source-mask rectangular extents with margins, clipping at world
    edges, rejection of corrupt/empty masks and thin one-cell branches.
-2. Compiled production-C 32X map projection preserves an intentionally
+3. Compiled production-C 32X map projection preserves an intentionally
    missing lower-left road quadrant without hiding the other three,
    and rejects unknown mode slots.
-3. Compiled production-C original-circuit recovery distinguishes source
+4. Compiled production-C original-circuit recovery distinguishes source
    side-road position from an unrelated main-route projection, keeps
    earned lap state, clears invalid wrong-way state and restores the
    genuine safe source-road pose after leaving it.
