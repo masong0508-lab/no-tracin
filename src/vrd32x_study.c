@@ -152,25 +152,45 @@ static void map_pixel(volatile u16 *page,s32 x,s32 y,u8 color)
 
 void vrd32x_study_map(volatile u16 *page,s32 slot,s32 x0,s32 y0,s32 w,s32 h,u8 color)
 {
-    // The old preview filled every 64x64 grid tile even when its sampled
-    // source BSP mask only covered a sliver. That invents fake wide roads,
-    // conceals branches and connects gaps. Each tile is already eight by
-    // eight authenticated samples: display only 4x4 quadrants containing
-    // at least one on-road sample. No extra data, RAM or staging-line use.
-    if((u32)slot>=TRACK_VRD_COUNT || w<=0 || h<=0)return;
-    for(s32 row=0;row<64;row++)for(s32 col=0;col<64;col++){
-        s32 id=vrd_study_lookups[slot][row*64+col];
-        if(!id)continue;
-        const u16 *tile=vrd_study_heights[slot]+(id-1)*64;
-        for(s32 dy=0;dy<2;dy++)for(s32 dx=0;dx<2;dx++){
-            s32 found=0;
-            for(s32 sy=dy*4;sy<dy*4+4 && !found;sy++)
-                for(s32 sx=dx*4;sx<dx*4+4;sx++)
-                    if(tile[sy*8+sx]!=65535){found=1;break;}
-            if(!found)continue;
-            s32 px=x0+((col*2+dx)*w)/128;
-            s32 py=y0+((row*2+dy)*h)/128;
-            map_pixel(page,px,py,color);
+    // The current road import is still a *sampled* 68000 collision surface,
+    // not Sega's original SH-2 polygon mesh or race routing. The preview
+    // must nevertheless use its actual sample mask instead of filling
+    // 64x64 ROM lookup tiles or using a fabricated staging centreline.
+    //
+    // Source-mask bounds are calculated once during PRIVATE ROM import:
+    // five x four u16 constants in the generated ROM header. No runtime
+    // framebuffer/heap/new tables, and no dynamic route skeleton graphics.
+    if ((u32)slot >= TRACK_VRD_COUNT || w <= 4 || h <= 4) return;
+    const u16 *bounds=vrd_study_preview_bounds[slot];
+    s32 minx=bounds[0],maxx=bounds[1],minz=bounds[2],maxz=bounds[3];
+    s32 dx=maxx-minx,dz=maxz-minz;
+    if (dx<=0 || dz<=0) return;
+    // Project sampled +Z upward, consistent with source world-space track
+    // previews. Keep the true X/Z proportions: no stretched roads/corners.
+    s32 sx=dx*256/(w-4),sz=dz*256/(h-4);
+    s32 scale=sx>sz?sx:sz;
+    if (scale<=0) scale=1;
+    s32 ox=x0+(w-dx*256/scale)/2;
+    s32 oy=y0+(h+dz*256/scale)/2;
+
+    // A pixel represents several ROM sample cells on a small screen.
+    // Source hit probes at its centre and four subpixel offsets retain
+    // thin verified side roads without inventing a tile-wide road fill.
+    // The maximum false-positive extension is one thumbnail pixel.
+    s32 probe=scale/1024;
+    if (probe<1) probe=1;
+    for(s32 py=y0;py<y0+h;py++){
+        if((u32)py>=SCREEN_H)continue;
+        s32 z=minz+(oy-py)*scale/256;
+        for(s32 px=x0;px<x0+w;px++){
+            if((u32)px>=SCREEN_W)continue;
+            s32 x=minx+(px-ox)*scale/256;
+            if(sample(slot,x,z)>=0 ||
+               sample(slot,x-probe,z-probe)>=0 ||
+               sample(slot,x+probe,z-probe)>=0 ||
+               sample(slot,x-probe,z+probe)>=0 ||
+               sample(slot,x+probe,z+probe)>=0)
+                map_pixel(page,px,py,color);
         }
     }
 }
