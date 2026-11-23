@@ -243,18 +243,33 @@ void vr_original_map(volatile u16 *page,s32 course,
     // source-covered lanes without painting a non-source skeleton.
     s32 half=scale/512;
     if(half<1)half=1;
-    for(s32 py=y0;py<y0+h;py++){
-        if((u32)py>=SCREEN_H)continue;
-        s32 z=minz+((oy-py)*scale)/256;
-        for(s32 px=x0;px<x0+w;px++){
-            if((u32)px>=SCREEN_W)continue;
-            s32 x=minx+((px-ox)*scale)/256;
-            if(raw_surface(c,x,z)==0 ||
-               raw_surface(c,x-half,z-half)==0 ||
-               raw_surface(c,x+half,z-half)==0 ||
-               raw_surface(c,x-half,z+half)==0 ||
-               raw_surface(c,x+half,z+half)==0)
-                original_map_pixel(page,px,py,color);
+    if (c->preview_bits && w==102 && h==68) {
+        // The animated menu redraws every frame. Its exact source asphalt
+        // silhouette is generated at PRIVATE import time and packed as
+        // 867 bytes of immutable ROM bits, rather than doing ~35,000
+        // original tile decodes each frame. Only the dot/starting line
+        // below are dynamic; no framebuffer cache or extra EWRAM.
+        for(s32 py=0;py<68;py++)for(s32 px=0;px<102;px++){
+            s32 i=py*102+px;
+            if(c->preview_bits[i>>3] & (1u<<(i&7)))
+                original_map_pixel(page,x0+px,y0+py,color);
+        }
+    }else{
+        // Arbitrary viewport sizes in diagnostics still project directly
+        // from the exact original packed asphalt grid, never fake roads.
+        for(s32 py=y0;py<y0+h;py++){
+            if((u32)py>=SCREEN_H)continue;
+            s32 z=minz+((oy-py)*scale)/256;
+            for(s32 px=x0;px<x0+w;px++){
+                if((u32)px>=SCREEN_W)continue;
+                s32 x=minx+((px-ox)*scale)/256;
+                if(raw_surface(c,x,z)==0 ||
+                   raw_surface(c,x-half,z-half)==0 ||
+                   raw_surface(c,x+half,z-half)==0 ||
+                   raw_surface(c,x-half,z+half)==0 ||
+                   raw_surface(c,x+half,z+half)==0)
+                    original_map_pixel(page,px,py,color);
+            }
         }
     }
     // The verified native route supplies the start/vehicle positions. It
