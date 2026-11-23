@@ -24,11 +24,13 @@ try:
     from tools.export_vrd_32x_surface_mesh import grid_samples
     from tools.inspect_vrd_32x_tables import ROM_SHA256
     from tools.vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
+    from tools.vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface
     from export_vrd_32x_surface_mesh import grid_samples
     from inspect_vrd_32x_tables import ROM_SHA256
     from vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
+    from vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity
 
 SIDE = 512
 GAME_WORLD = 16384
@@ -138,9 +140,23 @@ def write_pack(source:bytes,output:Path):
         mask=np.array([h is not None for h in samples],dtype=bool).reshape((SIDE,SIDE))
         # Road coverage is from authenticated source BSP hits, NOT the
         # skeleton loop. Retain the +Z image coordinate convention.
-        bounds=sampled_road_bounds(mask.flat,side=SIDE,units_per_sample=PIXEL_WORLD)
+        # Exact *source 68000 BSP* regions may include thin roads missed
+        # by the coarse 8x8 collision/height raster. Reconstruct original
+        # integer constraints to bound the complete collision geometry;
+        # fail closed if the analytical first-match regions disagree with
+        # the original ROM interpreter at representative source coordinates.
+        region_audit=audit_mode_group_identity(
+            surface, sample_points=(0,128,256,384,511))
+        bounds=mode_polygon_bounds(surface)
         road_bounds.append(bounds)
-        preview=sampled_preview_bits(mask.flat,bounds,side=SIDE,units_per_sample=PIXEL_WORLD)
+        # This fixed GBA selector bitmap queries the ORIGINAL source BSP
+        # at each projected pixel, not the approximated staging sample grid.
+        # The actual physics collision raster remains an approximation.
+        def exact_gba_road(x,z):
+            return surface.sample_world(x*2-GAME_WORLD,z*2-GAME_WORLD) is not None
+        preview=sampled_preview_bits(mask.flat,bounds,side=SIDE,
+                                     units_per_sample=PIXEL_WORLD,
+                                     source_sampler=exact_gba_road)
         preview_name=f'vrd_study_preview_{slot}'
         previews.append(preview_name)
         data.append(c_array('u8',preview_name,preview,32))
@@ -176,6 +192,8 @@ def write_pack(source:bytes,output:Path):
                                road_tile_count=len(active),valid_sample_pixels=int(mask.sum()),
                                preview_sampled_road_bounds_gba=list(bounds),
                                preview_is_source_mask_not_skeleton=True,
+                               preview_is_exact_rom_bsp=True,
+                               native_integer_bsp_region_audit=region_audit,
                                source_preview_rom_bytes=len(preview),
                                min_raw_plane_height=minimum,calibrated_height_divisor=HEIGHT_DIV,
                                route_type='skeleton_cycle_NOT_authentic_start_finish_or_lap',
