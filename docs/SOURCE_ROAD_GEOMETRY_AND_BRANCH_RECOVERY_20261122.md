@@ -63,6 +63,30 @@ data, and the vertical scale remains unverified. Importer stats record
 `preview_sampled_road_bounds_gba`; they do not claim named course identity.
 No new runtime framebuffer, heap, polygon list or large RAM cache is added.
 
+## Animated course-selector CPU protection (private ROM thumbnail caches)
+
+The standard course-select UI redraws a **102×68** map every animation
+frame. Directly resampling the source's 2-bit collision and 32X BSP height
+tiles at several subpixel positions per screen pixel would waste GBA CPU
+time on a static silhouette.
+
+Both optional source importers now prepare a **867-byte, 1-bit-per-pixel
+ROM-only map** for each original environment: three original Genesis
+races and five unverified 32X source-mask modes (6,936 total bitmap bytes,
+plus the small 32X bounds table). They preserve source-derived asphalt/road
+areas and map proportions. The fixed course selector draws only set bits,
+then its original Genesis start/dynamic car marker on top. No new EWRAM,
+framebuffer, heap, per-frame source decoding or geometry changes are
+required. The rare arbitrary-view-size drawing path continues to consult
+the actual source mask instead of inferring a fake route.
+
+Synthetic source-only regressions generate fake asphalt branches and a 32X
+hole, compile the **production C** map routines and verify the cached
+thumbnails' content and orientation. Source-only testing is not a claim of
+matching real Deluxe screenshots or an FPS benchmark; those require the
+owner's private exact-hash-gated donor cartridges and emulator/hardware
+comparisons.
+
 ## Verification and release gates
 
 Synthetic source-only tests verify:
