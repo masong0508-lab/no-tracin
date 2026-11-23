@@ -9,7 +9,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/"tools"))
-from vrd32x_map_geometry import sampled_road_bounds
+from vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
 
 
 class SampledRoadBoundsTests(unittest.TestCase):
@@ -36,6 +36,26 @@ class SampledRoadBoundsTests(unittest.TestCase):
         mask[4*8+5]=True
         self.assertEqual(sampled_road_bounds(mask,side=8,units_per_sample=32,margin=0),
                          (96,191,128,159))
+
+    def test_fixed_preview_bitmap_keeps_sample_mask_gaps_and_orientation(self):
+        mask = [False] * 64
+        for row in range(8):
+            for col in range(8):
+                mask[row*8+col] = not (row<4 and col<4)
+        bits = sampled_preview_bits(mask, (0, 255, 0, 255),
+                                    side=8, units_per_sample=32)
+        self.assertEqual(len(bits), 867)
+        def pixel(x, y):
+            i = y*102+x
+            return bool(bits[i>>3] & (1 << (i&7)))
+        # Source +Z is up; the genuine empty quadrant must stay lower-left.
+        self.assertFalse(pixel(30, 50))
+        self.assertTrue(pixel(30, 20))
+        self.assertTrue(pixel(70, 50))
+        self.assertTrue(pixel(70, 20))
+        with self.assertRaises(ValueError):
+            sampled_preview_bits(mask[:-1], (0,255,0,255),
+                                 side=8, units_per_sample=32)
 
     def test_fails_closed_on_unsupported_masks(self):
         for mask in ([],[False]*64,[True]*63,[True]*65):
