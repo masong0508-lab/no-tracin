@@ -33,6 +33,10 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
 // Artificial track fixture: route-only lookup shares its known geometry.
 s32 track_find_road(s32 x, s32 z, TrackHit *hit) { return track_find(x, z, hit); }
 s32 track_half_width(s32 segment) { (void)segment; return 150; }
+#ifdef WITH_VR_ORIGINAL_TRACKS
+// Synthetic original-course asphalt fixture, no donor bytes required.
+s32 track_surface(s32 x, s32 z) { (void)x; (void)z; return SURF_ROAD; }
+#endif
 s32 track_height(s32 x, s32 z) { (void)x; (void)z; return 0; }
 s32 track_height_near(s32 segment, s32 x, s32 z)
 {
