@@ -56,11 +56,17 @@ def route_records(course):
         exact_length = math.hypot(dx, dz)
         length = round(exact_length)
         require(length > 0, "Quantization collapsed a route segment")
-        width = math.floor(min(source["half_width_left"], source["half_width_right"]) / DIVISOR)
+        left = math.floor(source["half_width_left"] / DIVISOR)
+        right = math.floor(source["half_width_right"] / DIVISOR)
+        width = min(left, right)
         require(width > 24, "Original route is too narrow for the current car collision radius")
+        # Keep the independent original asphalt widths for *classification*
+        # of source-backed side branches. The narrowest width remains the
+        # safe common racing lane for the existing rivals and road collision.
         records.append(dict(x=x, y=y, z=z, ux=round(dx / exact_length * 16384),
                             uz=round(dz / exact_length * 16384), length=length,
-                            distance=distance, heading=math.atan2(dx, dz), width=width))
+                            distance=distance, heading=math.atan2(dx, dz),
+                            width=width, left=left, right=right))
         distance += length
     require(distance < 65536, "Original route exceeds the current lap-distance format")
     for i, p in enumerate(records):
@@ -248,6 +254,8 @@ def track_header(result):
             out.append("    {"+", ".join(map(str,values))+"},")
         out.append("};")
         out.extend((c_array("u16",pre+"_widths",[p['width'] for p in records]),
+                    c_array("u16",pre+"_native_lefts",[p['left'] for p in records]),
+                    c_array("u16",pre+"_native_rights",[p['right'] for p in records]),
                     c_array("u16",pre+"_cell_first",first),c_array("u8",pre+"_cell_count",count,32),
                     c_array("u8",pre+"_cell_list",flat,32)))
         start_time=min(240,max(64,math.ceil(lap/500)))
@@ -255,7 +263,15 @@ def track_header(result):
         scene=("SCENE_FOREST","SCENE_BAY","SCENE_MOUNTAINS")[ci]
         definitions.append(f'    {{ "{course["name"]}", "{course["level"]}", {pre}_points, {len(records)}, {lap}, {pre}_cell_first, {pre}_cell_count, {pre}_cell_list, 0, 0, 0, 0, 0, 0, 0, 0, 3, {start_time}, {cp_time}, {scene}, {pre}_widths }},')
         stats.append(dict(name=course['name'],route_points=len(records),lap_world_units=lap,
-                          minimum_half_width=min(p['width'] for p in records)))
+                          minimum_half_width=min(p['width'] for p in records),
+                          asymmetric_native_widths_preserved=True,
+                          minimum_native_left_width=min(p['left'] for p in records),
+                          minimum_native_right_width=min(p['right'] for p in records)))
+    # Only the private, optional original pack uses these per-side widths.
+    # Preserve the existing TrackDef and GBA SRAM layout for every build.
+    out.append("static const u16 *const vr_native_left_widths[3] = { vr0_native_lefts, vr1_native_lefts, vr2_native_lefts };")
+    out.append("static const u16 *const vr_native_right_widths[3] = { vr0_native_rights, vr1_native_rights, vr2_native_rights };")
+    out.append("static const u8 vr_native_route_counts[3] = { "+", ".join(str(len(c["route"])) for c in result["courses"])+" };")
     out.append("#define VR_ORIGINAL_TRACK_DEFS \\")
     for i,definition in enumerate(definitions):
         out.append(definition+(" \\" if i+1<len(definitions) else ""))
