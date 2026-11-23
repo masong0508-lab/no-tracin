@@ -183,3 +183,79 @@ def signed_area(poly: tuple[tuple[Fraction, Fraction], ...]) -> Fraction:
     twice = sum(x0*z1 - x1*z0 for (x0,z0),(x1,z1)
                 in zip(poly, poly[1:] + poly[:1]))
     return abs(twice) / 2
+
+
+def mode_polygon_bounds(road, *, margin: int = 64) -> tuple[int, int, int, int]:
+    """Original 68000 BSP coverage bounds, mapped to the 16,384 GBA world.
+
+    This traces the exact *source collision boundary inequalities* instead
+    of deriving bounds from the centres of coarse 8x8 raster samples.
+    It includes narrow branches which a 64-unit source sampling grid can
+    miss entirely. It does not infer a racing route, pit entry or SH-2 mesh.
+
+    A 32X 512-unit tile occupies 256 GBA coordinates. Fractional source
+    polygon vertices are rounded OUTWARDS with a small bounded margin.
+    """
+    import math
+
+    if margin < 0 or margin > 512:
+        raise ValueError("invalid source-BSP framing margin")
+    minx = minz = None
+    maxx = maxz = None
+    for index, marker in enumerate(road.grid):
+        if marker == road.background:
+            continue
+        row, col = divmod(index, 64)
+        for region in tile_regions(road, row, col):
+            for x, z in region.polygon:
+                xx, zz = (col * 512 + x) / 2, (row * 512 + z) / 2
+                if minx is None:
+                    minx = maxx = xx
+                    minz = maxz = zz
+                else:
+                    minx, maxx = min(minx, xx), max(maxx, xx)
+                    minz, maxz = min(minz, zz), max(maxz, zz)
+    if minx is None:
+        raise ValueError("no source BSP road polygons")
+    return (max(0, math.floor(minx) - margin),
+            min(16383, math.ceil(maxx) + margin),
+            max(0, math.floor(minz) - margin),
+            min(16383, math.ceil(maxz) + margin))
+
+
+def audit_mode_group_identity(road, *, sample_points=(0, 1, 63, 127, 255,
+                                                       383, 447, 510, 511)) -> dict:
+    """Private donor cross-check: original CPU group ID vs convex regions.
+
+    Checks both road coverage and the first matched height-plane selector,
+    rather than merely checking a 2D silhouette. Any mismatch is an error;
+    otherwise the importer can rely on the exact integer inequalities.
+    """
+    comparisons = 0
+    occupied_tiles = 0
+    polygons = 0
+    for index, marker in enumerate(road.grid):
+        if marker == road.background:
+            continue
+        row, col = divmod(index, 64)
+        regions = tile_regions(road, row, col)
+        occupied_tiles += 1
+        polygons += len(regions)
+        for z in sample_points:
+            for x in sample_points:
+                hit = road.sample_local(row, col, x, z)
+                predicted = first_group(regions, x, z)
+                actual = hit.group if hit is not None else None
+                if predicted != actual:
+                    raise ValueError(
+                        f"Source BSP polygon mismatch slot={road.slot} tile="
+                        f"{row},{col} at {x},{z}: {predicted} != {actual}"
+                    )
+                comparisons += 1
+    if occupied_tiles <= 0:
+        raise ValueError("empty source road mode")
+    return {"mode_slot": road.slot,
+            "active_source_tiles": occupied_tiles,
+            "clipped_source_regions": polygons,
+            "sample_points_verified": comparisons,
+            "first_match_source_parity": True}
