@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from vr_rom import RomError, parse_rom
+from vr_rom import ASPHALT, RomError, parse_rom, surface_at
 
 IMPORT_VERSION = 1
 ORIGIN = 8192
@@ -166,6 +166,46 @@ def source_road_bounds(terrain):
             min(WORLD - 1, WORLD - low_z * 8 + 64))
 
 
+def source_preview_bits(course, bounds, width=102, height=68):
+    """Pack a ROM-only bitmap matching the in-game source-asphalt preview.
+
+    The course-select scene redraws this map every video frame. Rendering
+    102x68 source-projection pixels with five full 2-bit mask lookups each
+    frame would waste GBA CPU time; precompute this exact projection once
+    during private source-ROM import. The moving car dot remains live.
+    """
+    require(width > 4 and height > 4, "Invalid original preview dimensions")
+    minx, maxx, minz, maxz = bounds
+    dx, dz = maxx - minx, maxz - minz
+    require(dx > 0 and dz > 0, "Invalid source asphalt preview extents")
+
+    def trunc_div(a, b):
+        # C99's signed integer division truncates toward zero.
+        return a // b if a >= 0 else -((-a) // b)
+
+    sx = dx * 256 // (width - 4)
+    sz = dz * 256 // (height - 4)
+    scale = max(1, sx, sz)
+    ox = (width - dx * 256 // scale) // 2
+    oy = (height + dz * 256 // scale) // 2
+    half = max(1, scale // 512)
+    bits = [0] * ((width * height + 7) // 8)
+
+    def asphalt(x, z):
+        return surface_at(course, (x - ORIGIN) * 2, (z - ORIGIN) * 2) == ASPHALT
+
+    for py in range(height):
+        z = minz + trunc_div((oy - py) * scale, 256)
+        for px in range(width):
+            x = minx + trunc_div((px - ox) * scale, 256)
+            if (asphalt(x, z) or asphalt(x-half, z-half)
+                    or asphalt(x+half, z-half) or asphalt(x-half, z+half)
+                    or asphalt(x+half, z+half)):
+                i = py * width + px
+                bits[i >> 3] |= 1 << (i & 7)
+    return bits
+
+
 def mesh_header(courses):
     out = ["// Generated from a locally supplied ROM. Do not commit this file.",
            "#ifndef VR_ORIGINAL_MESH_DATA_H", "#define VR_ORIGINAL_MESH_DATA_H"]
@@ -221,16 +261,20 @@ def mesh_header(courses):
         out.append("};")
         terrain=course["terrain"]
         road_bounds=source_road_bounds(terrain)
+        preview=source_preview_bits(course,road_bounds)
+        out.append(c_array("u8",prefix+"_preview_bits",preview,32))
         out.extend((c_array("u16",prefix+"_height_grid",terrain["height_grid"]),
                     c_array("s16",prefix+"_planes",[v for p in terrain["height_planes"] for v in p]),
                     c_array("u16",prefix+"_surface_grid",terrain["surface_grid"]),
                     c_array("u8",prefix+"_surface_tiles",terrain["surface_tiles"],32)))
-        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']}, {', '.join(map(str, road_bounds))} }},")
+        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']}, {', '.join(map(str, road_bounds))}, {prefix}_preview_bits }},")
         stats.append(dict(name=course["name"],source_sections=len(sections),
                           source_polygons=course["polygon_count"],rendered_polygons=len(faces),
                           unique_polygons=len(identities),duplicate_polygons=len(faces)-len(identities),
                           source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"],
-                          source_asphalt_bounds_gba=list(road_bounds)))
+                          source_asphalt_bounds_gba=list(road_bounds),
+                          source_map_preview_rom_bytes=len(preview),
+                          preview_resamples_original_asphalt=True))
     out.append("static const VrOriginalCourse vr_original_courses[3] = {")
     out.extend(descriptors);out.extend(("};","#endif",""))
     return "\n".join(out), stats
