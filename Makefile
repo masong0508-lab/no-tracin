@@ -110,4 +110,4 @@ $(VRD_BUILD):
 .PHONY: vr32x-original-bsp-evidence
 vr32x-original-bsp-evidence:
 	@test -n "$(VR32X_ROM)" || (echo 'Supply VR32X_ROM="/path/to/Virtua Racing Deluxe 32X (U).bin"' >&2; exit 2)
-	python3 tools/export_vrd32x_exact_bsp.py --rom "$(VR32X_ROM)" --out-dir build/vrd32x-bsp
+	python3 tools/export_vrd32x_exact_bsp.py --rom "$(VR32X_ROM)" --out-dir build/vrd32x-bsp --obj
