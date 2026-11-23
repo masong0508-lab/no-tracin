@@ -3,6 +3,8 @@
 #include "gba.h"
 // Read-only, locally generated 32X road study. Not original course meshes or
 // authentic routes; no donor content exists in the public source tree.
+// Native original mode-3 upper bridge and lower road are independent.
+void vrd32x_study_set_height_reference(s32 world_height_q8);
 s32 vrd32x_study_slot(void);  // -1 unless an optional 32X study is selected
 s32 vrd32x_study_height(s32 slot, s32 x, s32 z);  // Q8
 s32 vrd32x_study_surface(s32 slot, s32 x, s32 z);
