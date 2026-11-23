@@ -432,7 +432,7 @@ void race_step(Car *player, s32 started)
     // phantom checkpoints, or show WRONG WAY using that segment's direction.
     s32 original_branch = g->track >= TRACKS_PER_SET &&
         g->track < TRACKS_PER_SET * 2 &&
-        (!found || hit.dist >= track_half_width(hit.seg)) &&
+        (!found || hit.dist > track_native_half_width(hit.seg, hit.lat) + 16) &&
         track_surface(x, z) == SURF_ROAD;
     if (original_branch) found = 0;
 #endif
