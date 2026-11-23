@@ -57,6 +57,28 @@ class SampledRoadBoundsTests(unittest.TestCase):
             sampled_preview_bits(mask[:-1], (0,255,0,255),
                                  side=8, units_per_sample=32)
 
+    def test_direct_68000_sampler_reveals_road_missed_by_coarse_mask(self):
+        # An entirely empty coarse raster must not suppress a narrow true
+        # source corridor when the authentic per-pixel BSP sampler sees it.
+        coarse=[False]*64
+        calls=[]
+        def native(x,z):
+            calls.append((x,z))
+            return 100 <= x < 150 and 25 <= z < 225
+        bounds=(80,160,0,255)
+        bits=sampled_preview_bits(coarse,bounds,side=8,
+                                  units_per_sample=32,source_sampler=native)
+        self.assertEqual(len(bits),867)
+        self.assertTrue(any(bits))
+        self.assertGreater(len(calls),0)
+        self.assertTrue(all(0<=x<256 and 0<=z<256 for x,z in calls))
+        blank=sampled_preview_bits(coarse,bounds,side=8,units_per_sample=32)
+        self.assertFalse(any(blank))
+        empty_exact=sampled_preview_bits(coarse,bounds,side=8,
+                                         units_per_sample=32,
+                                         source_sampler=lambda x,z:False)
+        self.assertFalse(any(empty_exact))
+
     def test_fails_closed_on_unsupported_masks(self):
         for mask in ([],[False]*64,[True]*63,[True]*65):
             with self.subTest(length=len(mask)):
