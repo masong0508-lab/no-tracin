@@ -23,10 +23,12 @@ try:
     from tools.decode_vrd_32x_surface import RoadSurface
     from tools.export_vrd_32x_surface_mesh import grid_samples
     from tools.inspect_vrd_32x_tables import ROM_SHA256
+    from tools.vrd32x_map_geometry import sampled_road_bounds
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface
     from export_vrd_32x_surface_mesh import grid_samples
     from inspect_vrd_32x_tables import ROM_SHA256
+    from vrd32x_map_geometry import sampled_road_bounds
 
 SIDE = 512
 GAME_WORLD = 16384
@@ -128,12 +130,16 @@ def write_pack(source:bytes,output:Path):
     output.mkdir(parents=True,exist_ok=True)
     data=['// PRIVATE GENERATED source-ROM-derived road height tiles. Do NOT commit.','// Source SHA256 '+ROM_SHA256,'// Heights are calibrated for study play, not original 32X units.']
     routes=['// PRIVATE GENERATED source-ROM-derived approximate staging loops. Do NOT commit.']
-    defs=[];lookups=[];heights_all=[];statistics=[]
+    defs=[];lookups=[];heights_all=[];statistics=[];road_bounds=[]
     for slot in range(5):
         surface=RoadSurface(source,slot)
         side,samples=grid_samples(surface,ROAD_SUBDIV)
         if side!=SIDE:raise ValueError('wrong map resolution')
         mask=np.array([h is not None for h in samples],dtype=bool).reshape((SIDE,SIDE))
+        # Road coverage is from authenticated source BSP hits, NOT the
+        # skeleton loop. Retain the +Z image coordinate convention.
+        bounds=sampled_road_bounds(mask.flat,side=SIDE,units_per_sample=PIXEL_WORLD)
+        road_bounds.append(bounds)
         distmap=distance_transform_edt(mask)
         route,lap,minimum=make_route(samples,mask,slot,distmap)
         first,count,flat=grid_lists(route)
@@ -164,10 +170,16 @@ def write_pack(source:bytes,output:Path):
                     f'0, 0, 0, 0, 0, 0, 0, 0, 3, 180, 90, SCENE_MOUNTAINS, {stem}_half_widths }}')
         statistics.append(dict(slot=slot,route_points=len(route),staging_route_length=lap,
                                road_tile_count=len(active),valid_sample_pixels=int(mask.sum()),
+                               preview_sampled_road_bounds_gba=list(bounds),
+                               preview_is_source_mask_not_skeleton=True,
                                min_raw_plane_height=minimum,calibrated_height_divisor=HEIGHT_DIV,
                                route_type='skeleton_cycle_NOT_authentic_start_finish_or_lap',
                                geometry='private_68000_BSP_sampled_ROAD_STUDY'))
     routes.append('#define VRD32X_STUDY_TRACK_DEFS \\\n    '+', \\\n    '.join(defs))
+    # Four immutable u16s per mode in ROM, no extra runtime EWRAM or heap.
+    data.append('static const u16 vrd_study_preview_bounds[5][4] = {\\n    ' +
+                ',\\n    '.join('{ '+', '.join(map(str, b))+' }' for b in road_bounds) +
+                '\\n};')
     data.append('static const u16 *const vrd_study_lookups[5] = { '+', '.join(lookups)+' };')
     data.append('static const u16 *const vrd_study_heights[5] = { '+', '.join(heights_all)+' };')
     for filename,content in [('vrd32x_study_tracks.h','\n\n'.join(routes)+'\n'),('vrd32x_study_data.h','\n\n'.join(data)+'\n')]:
