@@ -22,13 +22,13 @@ from skimage.morphology import skeletonize
 try:
     from tools.decode_vrd_32x_surface import RoadSurface
     from tools.export_vrd_32x_surface_mesh import grid_samples
-    from tools.inspect_vrd_32x_tables import ROM_SHA256
+    from tools.inspect_vrd_32x_tables import ROM_SHA256, inspect_image
     from tools.vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from tools.vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface
     from export_vrd_32x_surface_mesh import grid_samples
-    from inspect_vrd_32x_tables import ROM_SHA256
+    from inspect_vrd_32x_tables import ROM_SHA256, inspect_image
     from vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity
 
@@ -129,12 +129,17 @@ def c_array(ctype,name,items,n=16):
 def write_pack(source:bytes,output:Path):
     if hashlib.sha256(source).hexdigest()!=ROM_SHA256:
         raise ValueError('32X ROM hash does not match verified US source revision')
+    # Validate every original 68000 source pointer and the full cartridge
+    # identity exactly ONCE, before any private output is generated. Each
+    # RoadSurface then reuses that immutable verified image (not five deep
+    # reparses of every 4096-cell mode).
+    inspect_image(source,require_identity=True)
     output.mkdir(parents=True,exist_ok=True)
     data=['// PRIVATE GENERATED source-ROM-derived road height tiles. Do NOT commit.','// Source SHA256 '+ROM_SHA256,'// Heights are calibrated for study play, not original 32X units.']
     routes=['// PRIVATE GENERATED source-ROM-derived approximate staging loops. Do NOT commit.']
     defs=[];lookups=[];heights_all=[];statistics=[];road_bounds=[];previews=[]
     for slot in range(5):
-        surface=RoadSurface(source,slot)
+        surface=RoadSurface(source,slot,verify_identity=False)
         side,samples=grid_samples(surface,ROAD_SUBDIV)
         if side!=SIDE:raise ValueError('wrong map resolution')
         mask=np.array([h is not None for h in samples],dtype=bool).reshape((SIDE,SIDE))
