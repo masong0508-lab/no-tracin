@@ -334,7 +334,7 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
 #ifdef WITH_VRD_32X_TRACKS
         if (*sel >= TRACK_VRD_FIRST){set=TRACK_SET_VRD;course=*sel-TRACK_VRD_FIRST;}
 #endif
-#ifdef WITH_VR_ORIGINAL_TRACKS
+#if defined(WITH_VR_ORIGINAL_TRACKS) || defined(WITH_VRD_32X_TRACKS)
         if (p & (KEY_L | KEY_R)) {
             set = (set + 1) % TRACK_SET_COUNT;
             if(course >= track_set_count(set)) course=0;
@@ -362,7 +362,7 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
 #endif
         panel(page, 0, 29, SCREEN_W, 40, C_PANEL);
         hud_text_centered(31, track_set_name(set), 0, PAL_CYAN);
-#ifdef WITH_VR_ORIGINAL_TRACKS
+#if defined(WITH_VR_ORIGINAL_TRACKS) || defined(WITH_VRD_32X_TRACKS)
         hud_text(10, 31, "L", 0, PAL_YELLOW);
         hud_text_right(230, 31, "R", 0, PAL_YELLOW);
 #endif
