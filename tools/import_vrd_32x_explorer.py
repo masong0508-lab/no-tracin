@@ -25,12 +25,14 @@ try:
     from tools.inspect_vrd_32x_tables import ROM_SHA256, inspect_image, be16
     from tools.vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from tools.vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity, tile_priority_faces
+    from tools.vrd32x_layered_course import layered_main_cycle
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface, signed16
     from export_vrd_32x_surface_mesh import grid_samples
     from inspect_vrd_32x_tables import ROM_SHA256, inspect_image, be16
     from vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity, tile_priority_faces
+    from vrd32x_layered_course import layered_main_cycle
 
 GAME_WORLD = 16384
 HEIGHT_DIV = 32  # VISUAL/PHYSICS CALIBRATION ONLY; native units unverified
@@ -68,30 +70,37 @@ def skeleton_route(mask):
     return pts
 
 
-def make_route(heights, mask, slot, dist_to_edge):
-    pts=skeleton_route(mask)
+def make_route(heights, mask, slot, dist_to_edge, *, layered=None,
+               bridge_heights=None, bridge_dist=None):
+    # Source layer 1 is only the real 68000 alternate mode-3 bridge.
+    pts=layered if layered is not None else [(0,y,x) for y,x in skeleton_route(mask)]
     raw_vals=[h for h in heights if h is not None]
+    if bridge_heights is not None:
+        raw_vals.extend(h for h in bridge_heights if h is not None)
     low=min(raw_vals)
     # Entire 2D road area, including divergent branches, remains drivable.
     # The representative loop is for camera/spawn/course preview ONLY.
     out=[];total=0
-    for i,(y,x) in enumerate(pts):
-        yn,xn=pts[(i+1)%len(pts)]
+    for i,(layer,y,x) in enumerate(pts):
+        _,yn,xn=pts[(i+1)%len(pts)]
         ax,az=int(x*PIXEL_WORLD+PIXEL_WORLD//2),int(y*PIXEL_WORLD+PIXEL_WORLD//2)
         bx,bz=int(xn*PIXEL_WORLD+PIXEL_WORLD//2),int(yn*PIXEL_WORLD+PIXEL_WORLD//2)
         dx,dz=bx-ax,bz-az
         length=max(1,int(math.sqrt(dx*dx+dz*dz)+.5))
         nx=int(round(dx/length*16384)); nz=int(round(dz/length*16384))
         heading=round(math.atan2(dx,dz)/math.tau*65536)&65535
-        raw=heights[y*SIDE+x]
+        raw=(bridge_heights if layer else heights)[y*SIDE+x]
+        if raw is None:raise ValueError('source route left its elevation layer')
         height=max(8,min(800,int((raw-low)/HEIGHT_DIV)+12))
         radius=8000
-        nxtnext=pts[(i+2)%len(pts)];ex=(nxtnext[1]-xn)*PIXEL_WORLD;ez=(nxtnext[0]-yn)*PIXEL_WORLD
+        nxtnext=pts[(i+2)%len(pts)];ex=(nxtnext[2]-xn)*PIXEL_WORLD;ez=(nxtnext[1]-yn)*PIXEL_WORLD
         turn=abs(math.atan2(ex,ez)-math.atan2(dx,dz));turn=min(turn,math.tau-turn)
         if turn>.01:radius=max(80,min(8000,int(length/turn)))
-        width=max(24,min(170, int(dist_to_edge[y,x]*PIXEL_WORLD*.8)))
+        active_dist=bridge_dist if layer else dist_to_edge
+        width=max(24,min(170, int(active_dist[y,x]*PIXEL_WORLD*.8)))
         out.append(dict(x=ax,z=az,y=height,ux=nx,uz=nz,len=length,dist=total,
-                        heading=heading,radius=radius,half_width=width,flags=0,verge=12))
+                        heading=heading,radius=radius,half_width=width,
+                        native_source_layer=layer,flags=0,verge=12))
         total+=length
     if total>65535:
         raise ValueError(f'route {slot} length {total} exceeds u16; reduce sampling scale')
@@ -190,6 +199,21 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         side,samples=grid_samples(surface,ROAD_SUBDIV)
         if side!=SIDE:raise ValueError('wrong map resolution')
         mask=np.array([h is not None for h in samples],dtype=bool).reshape((SIDE,SIDE))
+        bridge_surface=None
+        bridge_samples=None
+        bridge_mask=None
+        bridge_report=None
+        if slot==3:
+            # Original 68000 mode 3 has a DIFFERENT alternate lookup for
+            # its actual elevated road. It overlaps a lower native road.
+            bridge_surface=RoadSurface(source,3,True,verify_identity=False)
+            bridge_side,bridge_samples=grid_samples(bridge_surface,ROAD_SUBDIV)
+            if bridge_side!=SIDE:raise ValueError('native 32X overpass grid mismatch')
+            bridge_mask=np.array([h is not None for h in bridge_samples],dtype=bool).reshape((SIDE,SIDE))
+            audit=audit_mode_group_identity(
+                bridge_surface,sample_points=(0,128,256,384,511))
+            if not audit['first_match_source_parity']:
+                raise ValueError('authentic alternate source BSP mismatch')
         # Road coverage is from authenticated source BSP hits, NOT the
         # skeleton loop. Retain the +Z image coordinate convention.
         # Exact *source 68000 BSP* regions may include thin roads missed
@@ -200,12 +224,19 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         region_audit=audit_mode_group_identity(
             surface, sample_points=(0,128,256,384,511))
         bounds=mode_polygon_bounds(surface)
+        if bridge_surface is not None:
+            bb=mode_polygon_bounds(bridge_surface)
+            bounds=(min(bounds[0],bb[0]),max(bounds[1],bb[1]),
+                    min(bounds[2],bb[2]),max(bounds[3],bb[3]))
         road_bounds.append(bounds)
         # This fixed GBA selector bitmap queries the ORIGINAL source BSP
         # at each projected pixel, not the approximated staging sample grid.
         # The actual physics collision raster remains an approximation.
         def exact_gba_road(x,z):
-            return surface.sample_world(x*2-GAME_WORLD,z*2-GAME_WORLD) is not None
+            wx,wz=x*2-GAME_WORLD,z*2-GAME_WORLD
+            return (surface.sample_world(wx,wz) is not None or
+                    (bridge_surface is not None and
+                     bridge_surface.sample_world(wx,wz) is not None))
         preview=sampled_preview_bits(mask.flat,bounds,side=SIDE,
                                      units_per_sample=PIXEL_WORLD,
                                      source_sampler=exact_gba_road)
@@ -213,7 +244,16 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         previews.append(preview_name)
         data.append(c_array('u8',preview_name,preview,32))
         distmap=distance_transform_edt(mask)
-        route,lap,minimum=make_route(samples,mask,slot,distmap)
+        if bridge_surface is not None:
+            layered,bridge_report=layered_main_cycle(
+                mask,bridge_mask,samples,bridge_samples,
+                world_per_pixel=PIXEL_WORLD,max_points=MAX_POINTS)
+            route,lap,minimum=make_route(
+                samples,mask,slot,distmap,layered=layered,
+                bridge_heights=bridge_samples,
+                bridge_dist=distance_transform_edt(bridge_mask))
+        else:
+            route,lap,minimum=make_route(samples,mask,slot,distmap)
         first,count,flat=grid_lists(route)
         if exact_mesh:
             exact_first,exact_counts,exact_tris=exact_collision_tris(surface,minimum)
@@ -235,6 +275,22 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
             if all(h==65535 for h in sub):chunkmap.append(0)
             else:
                 active.append(cell);chunkmap.append(len(active));tiles+=sub
+        if bridge_surface is not None:
+            # ROM-only independent source height grid for native upper road.
+            alt_active=[];alt_lookup=[];alt_tiling=[]
+            for cell in range(4096):
+                cy,cx=divmod(cell,64);sub=[]
+                for row in range(ROAD_SUBDIV):
+                    for col in range(ROAD_SUBDIV):
+                        h=bridge_samples[(cy*ROAD_SUBDIV+row)*SIDE+(cx*ROAD_SUBDIV+col)]
+                        sub.append(65535 if h is None else
+                                   max(8,min(800,int((h-minimum)/HEIGHT_DIV)+12)))
+                if all(h==65535 for h in sub):alt_lookup.append(0)
+                else:
+                    alt_active.append(cell);alt_lookup.append(len(alt_active));alt_tiling+=sub
+            data.append('#define VRD_HAS_NATIVE_OVERPASS 1')
+            data.append(c_array('u16','vrd_native_overpass_lookup',alt_lookup,16))
+            data.append(c_array('u16','vrd_native_overpass_heights',alt_tiling,16))
         lookups.append(f'vrd_study_tile_{slot}')
         heights_all.append(f'vrd_study_height_{slot}')
         data.append(c_array('u16',lookups[-1],chunkmap,16))
@@ -261,7 +317,12 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                                native_integer_bsp_region_audit=region_audit,
                                source_preview_rom_bytes=len(preview),
                                min_raw_plane_height=minimum,calibrated_height_divisor=HEIGHT_DIV,
-                               route_type='skeleton_cycle_NOT_authentic_start_finish_or_lap',
+                               layered_alternate_68000_source_route=bridge_report,
+                               native_alternate_road_tiles=len(alt_active) if bridge_surface is not None else 0,
+                               native_alternate_road_samples=int(bridge_mask.sum()) if bridge_surface is not None else 0,
+                               route_type=('source_normal_and_alternate_3d_layered_loop'
+                                           if bridge_report is not None else
+                                           'skeleton_cycle_NOT_authentic_start_finish_or_lap'),
                                geometry='private_68000_BSP_sampled_ROAD_STUDY'))
     routes.append('#define VRD32X_STUDY_TRACK_DEFS \\\n    '+', \\\n    '.join(defs))
     # Four immutable u16s per mode in ROM, no extra runtime EWRAM or heap.
