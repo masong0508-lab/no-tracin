@@ -46,13 +46,19 @@ def sampled_road_bounds(valid_mask, *, side=512, units_per_sample=32, margin=2):
 
 
 def sampled_preview_bits(valid_mask, bounds, *, side=512,
-                         units_per_sample=32, width=102, height=68):
+                         units_per_sample=32, width=102, height=68,
+                         source_sampler=None):
     """Generate a ROM-only road silhouette for the animated GBA selector.
 
     This is the *same* source-backed, aspect-preserving, centre-and-corners
     projection as vrd32x_study_map at its normal 102x68 menu size.
     Output is packed little-bit-first, row-major, no proprietary bytes.
     All work happens at private import time, never in the render loop.
+
+    When source_sampler is supplied it must query the original 68000
+    ROM-backed BSP evaluator at the requested GBA-world (x,z), replacing
+    the lower-resolution 8x8-tile staging raster. This makes even thin
+    original road features visible where no coarse sample landed.
     """
     if side < 2 or units_per_sample < 1 or width <= 4 or height <= 4:
         raise ValueError("invalid 32X preview format")
@@ -77,6 +83,8 @@ def sampled_preview_bits(valid_mask, bounds, *, side=512,
     def road(x, z):
         if not (0 <= x < world and 0 <= z < world):
             return False
+        if source_sampler is not None:
+            return bool(source_sampler(x, z))
         return bool(valid[(z // units_per_sample) * side
                           + (x // units_per_sample)])
 
