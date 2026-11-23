@@ -1,6 +1,7 @@
 // Original meshes, road surfaces and height planes share one uniform transform:
 // GBA X/Z = donor mesh X/Z / 4 + 8192; GBA Y = donor mesh Y / 4.
 #include "vr_original.h"
+#include "track.h"
 #include "world.h"
 #include "vr_original_mesh.h"
 
