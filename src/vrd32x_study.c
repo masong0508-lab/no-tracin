@@ -14,11 +14,10 @@ s32 vrd32x_study_slot(void)
     return g_track - g_tracks - TRACK_VRD_FIRST;
 }
 
-// 512x512 raster = 64x64 verified 32X cells, 8 samples/cell. In GBA
-// coordinates each sample represents 32x32 world units. 0 means no tile;
-// 0xFFFF means an unsupported/offroad sample, never interpreted as height.
-// Generated high-detail tiles have 16 samples per source BSP cell; legacy
-// donor and synthetic builds use 8. All large samples remain ROM-only.
+// The source-generated ROM pack chooses 8 or 16 samples per original
+// 512-unit BSP cell. The optional 16x density improves edge fidelity while
+// retaining exactly the same bounded runtime lookup and no EWRAM allocation.
+// Legacy hand-built synthetic fixtures default to the previous 8x layout.
 #ifndef VRD_SAMPLE_SHIFT
 #define VRD_SAMPLE_SHIFT 5
 #define VRD_TILE_SHIFT 3
@@ -32,6 +31,7 @@ void vrd32x_study_set_height_reference(s32 world_height_q8)
 {
     native_reference_height=world_height_q8;
 }
+
 static s32 normal_sample(s32 slot,s32 x,s32 z)
 {
     if ((u32)slot >= TRACK_VRD_COUNT || (u32)x >= 16384 || (u32)z >= 16384)
@@ -45,19 +45,14 @@ static s32 normal_sample(s32 slot,s32 x,s32 z)
     return height==65535 ? -1 : height;
 }
 
-// The 32X BSP source is sampled every 32 world units; taking the nearest
-// sample for each wheel creates 32-unit stair steps on long inclines. Blend
-// height *within a fully supported four-sample patch*. If any required
-// sample belongs to unsupported/off-road space, use the last known road
-// sample rather than inventing a bridge across that gap. Q8 output, no heap
-// and no extra tables. Exact 32-unit grid vertices remain byte-identical.
-// Original 68000 source mode 3 has a physically distinct alternate
-// collision stream for its elevated bridge. Preserve both source
-// heights at identical X/Z rather than merging into a 2D surface.
+// The supported US cartridge has a SECOND, native 68000 BSP road mode
+// at normal mode 3: the elevated Highland bridge. Its geometry overlaps
+// the lower circuit at identical (x,z), but the two source height planes
+// differ significantly. Both are preserved in the PRIVATE generated ROM.
 #ifdef VRD_HAS_NATIVE_OVERPASS
 static s32 overpass_sample(s32 x,s32 z)
 {
-    if((u32)x>=16384 || (u32)z>=16384)return -1;
+    if((u32)x>=16384 || (u32)z>=16384) return -1;
     u32 sx=(u32)x>>VRD_SAMPLE_SHIFT,sz=(u32)z>>VRD_SAMPLE_SHIFT;
     u32 tile=(sz>>VRD_TILE_SHIFT)*64+(sx>>VRD_TILE_SHIFT);
     u32 id=vrd_native_overpass_lookup[tile];
@@ -74,10 +69,11 @@ static s32 sample(s32 slot,s32 x,s32 z)
 #ifdef VRD_HAS_NATIVE_OVERPASS
     if(slot==3){
         s32 upper=overpass_sample(x,z);
-        if(upper<0)return lower;
-        if(lower<0)return upper;
-        // Actual previous car altitude prevents crossing between source
-        // bridge and underpass collision levels at their intersection.
+        if(upper<0) return lower;
+        if(lower<0) return upper;
+        // Native-source layer choice is based on true previous car height,
+        // not arbitrary 2D route projection. Crossings cannot magically
+        // raise an underpass driver to the overpass (or vice versa).
         s32 du=upper*256-native_reference_height;
         s32 dl=lower*256-native_reference_height;
         if(du<0)du=-du;
@@ -88,6 +84,12 @@ static s32 sample(s32 slot,s32 x,s32 z)
     return lower;
 }
 
+// Taking the nearest sample for each wheel can create stair steps on
+// long inclines (16 units in high-detail builds; 32 in legacy builds). Blend
+// height *within a fully supported four-sample patch*. If any required
+// sample belongs to unsupported/off-road space, use the last known road
+// sample rather than inventing a bridge across that gap. Q8 output, no heap
+// and no extra tables. Exact sample vertices retain their raw height.
 static s32 smooth_height(s32 slot,s32 x,s32 z)
 {
     s32 a=sample(slot,x,z);
@@ -111,7 +113,8 @@ static s32 smooth_height(s32 slot,s32 x,s32 z)
     // Raw samples are 8..800. All intermediates fit signed 32-bit.
     s32 h0=a*VRD_SAMPLE_PITCH+(b-a)*fx;
     s32 h1=c*VRD_SAMPLE_PITCH+(d-c)*fx;
-    return (h0*(VRD_SAMPLE_PITCH-fz)+h1*fz)/
+    // Q8 exactly. PITCH is 16 or 32, so denominator is 1 or 4.
+    return (h0*(VRD_SAMPLE_PITCH-fz)+h1*fz) /
            ((VRD_SAMPLE_PITCH*VRD_SAMPLE_PITCH)/256);
 }
 
@@ -163,11 +166,12 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
         if (!r_visible(x+128,z+128,190)) continue;
         ground_quad(x,z,256,0,0,0,0,COLOR(M_GRASS,(ix+iz)&1));
     }
-    // Optional near source BSP triangles are partitioned by original
-    // first-height-plane priority during private ROM import. They are 68000
-    // collision geometry, NOT Sega's original SH-2 scenery meshes.
     s32 exact_faces=0;
 #ifdef VRD_EXACT_SOURCE_MESH
+    // Native 68000 BSP surface triangles, clipped to source boundaries and
+    // partitioned by first-height-plane priority during private import.
+    // Detail is confined to the near 2x2 source-tile neighborhood. We
+    // reserve the rest of the 180-face queue for distant coarse road LOD.
     s32 tcx=focus_x>>8,tcz=focus_z>>8;
     for(s32 tz=tcz-1;tz<=tcz+1 && exact_faces<100;tz++)
         for(s32 tx=tcx-1;tx<=tcx+1 && exact_faces<100;tx++){
@@ -175,7 +179,7 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
             s32 tile=tz*64+tx;
             if(!r_visible(tx*256+128,tz*256+128,200))continue;
             const VrdSourceTri *tris=vrd_exact_tris[slot];
-            s32 start=vrd_exact_first[slot][tile],count=vrd_exact_count[slot][tile];
+            s32 start=vrd_exact_first[slot][tile], count=vrd_exact_count[slot][tile];
             for(s32 k=0;k<count && exact_faces<100;k++){
                 const VrdSourceTri *p=&tris[start+k];
                 s32 mx=(p->xyz[0]+p->xyz[3]+p->xyz[6])/3;
@@ -190,14 +194,17 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
         }
 #endif
 #ifdef VRD_HAS_NATIVE_OVERPASS
-    // The upper bridge is visible from the true lower underpass.
-    // Reserve <=24 existing road faces. Source upper tiles are in ROM;
-    // no extra framebuffer, heap, RAM cache or per-frame mesh build.
+    // In the lower Highland tunnel, keep the actual bridge visually above
+    // the road. Even at a crossing the high source plane is never replaced
+    // by the false 2D merge. Reserve only 24 of the same 180 road faces.
     if(slot==3 &&
        focus_x+512>=vrd_native_bridge_bounds[0] &&
        focus_x-512<=vrd_native_bridge_bounds[1] &&
        focus_z+512>=vrd_native_bridge_bounds[2] &&
        focus_z-512<=vrd_native_bridge_bounds[3]){
+        // Keep the bridge budget independent of optional near-field BSP
+        // triangles: the previous shared counter accidentally suppressed
+        // every overpass face once that detail renderer used >24 faces.
         s32 bridge_faces=0;
         s32 start_x=(focus_x/64)*64-256,start_z=(focus_z/64)*64-256;
         for(s32 iz=0;iz<8 && bridge_faces<24 && exact_faces<180;iz++)
@@ -207,13 +214,14 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
                             overpass_sample(x,z+64),
                             overpass_sample(x+64,z+64),
                             overpass_sample(x+64,z)};
-                if(top[0]<0||top[1]<0||top[2]<0||top[3]<0)continue;
+                if(top[0]<0 || top[1]<0 || top[2]<0 || top[3]<0)
+                    continue;
                 s32 bottom=normal_sample(slot,x+32,z+32);
-                if(bottom<0)continue;
+                if(bottom<0)continue; // bridge-only road rendered normally
                 s32 up=(top[0]+top[1]+top[2]+top[3])/4;
                 if(up<=bottom+12 ||
                    native_reference_height>(bottom+up)*128)
-                    continue;
+                    continue; // no separate upper pass needed from bridge
                 if(!r_visible(x+32,z+32,68))continue;
                 ground_quad(x,z,64,top[0],top[1],top[2],top[3],
                             COLOR(M_ASPHALT,(ix+iz)&1));
@@ -222,13 +230,16 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
             }
     }
 #endif
-    // Distant sourced road uses the original coarse graphics LOD.
-    // Total source road face budget remains <=180. No heap/framebuffer.
+    // Render farther source sample cells at a coarse 64-unit graphics LOD.
+
+    // Max 19x19 candidates, <=180 surface faces, bounded render queue.
     s32 base_x=(focus_x/64)*64-576,base_z=(focus_z/64)*64-576;
     s32 faces=exact_faces;
     for(s32 j=0;j<18 && faces<180;j++)for(s32 i=0;i<18 && faces<180;i++){
         s32 x=base_x+i*64,z=base_z+j*64;
 #ifdef VRD_EXACT_SOURCE_MESH
+        // Close-up original BSP triangles replace, not overlay, coarse
+        // road patches. Preserve the 180-face source-road display cap.
         if(x>=focus_x-192 && x<focus_x+192 &&
            z>=focus_z-192 && z<focus_z+192)continue;
 #endif
@@ -323,4 +334,30 @@ void vrd32x_study_map(volatile u16 *page,s32 slot,s32 x0,s32 y0,s32 w,s32 h,u8 c
                 map_pixel(page,px,py,color);
         }
     }
+}
+
+// Render a moving marker on the ORIGINAL source-ordered road only.
+// The course thumbnail still displays full original BSP road coverage:
+// the marker is not an invented uniform-width racing line and its starting
+// location is not claimed as Sega's official race-start/checkpoint.
+void vrd32x_study_map_marker(volatile u16 *page,s32 slot,
+                             s32 x0,s32 y0,s32 w,s32 h,
+                             s32 road_x,s32 road_z,u8 color)
+{
+    if((u32)slot>=TRACK_VRD_COUNT || w<=4 || h<=4)return;
+    const u16 *bounds=vrd_study_preview_bounds[slot];
+    s32 minx=bounds[0],maxx=bounds[1],minz=bounds[2],maxz=bounds[3];
+    s32 dx=maxx-minx,dz=maxz-minz;
+    if(dx<=0||dz<=0)return;
+    s32 sx=dx*256/(w-4),sz=dz*256/(h-4);
+    s32 scale=sx>sz?sx:sz;
+    if(scale<=0)scale=1;
+    s32 ox=x0+(w-dx*256/scale)/2;
+    s32 oy=y0+(h+dz*256/scale)/2;
+    s32 px=ox+(road_x-minx)*256/scale;
+    s32 py=oy-(road_z-minz)*256/scale;
+    // Keep the marker inside the source-map panel; no border overwrite.
+    if(px<x0+2 || px>=x0+w-2 || py<y0+2 || py>=y0+h-2)return;
+    for(s32 y=-1;y<=1;y++)for(s32 x=-1;x<=1;x++)
+        map_pixel(page,px+x,py+y,color);
 }

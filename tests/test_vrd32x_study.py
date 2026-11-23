@@ -123,6 +123,13 @@ int main(void) {
     assert(MAP_PIXEL(40,30)==8);  // supported upper-left
     assert(MAP_PIXEL(80,60)==8);  // supported lower-right
     assert(MAP_PIXEL(80,30)==8);  // supported upper-right
+    // Small animated dot must use the exact original asphalt bounding box,
+    // not a new fake uniform-width route stroke or menu-border pixel.
+    vrd32x_study_map_marker(map_page,2,10,10,102,68,128,128,13);
+    assert(MAP_PIXEL(61,44)==13);
+    assert(MAP_PIXEL(10,10)==0);
+    vrd32x_study_map_marker(map_page,5,10,10,102,68,128,128,15);
+    assert(MAP_PIXEL(61,44)==13);
     return 0;
 }
 ''')

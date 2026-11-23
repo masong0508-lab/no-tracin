@@ -87,3 +87,15 @@ cartridge-containing GBA game stay in the owner's private package/ignored
 `build/`. Public GitHub includes only importer code, synthetic tests and
 this implementation/provenance report. **Continue this milestone; do not
 restart the source mapping investigation.**
+
+## Course-select map animation (source road, not an invented start)
+
+The GBA course selector now draws a 3×3 moving location marker along the
+**verified ordered source road nodes**, projected into the same authentic
+68000 BSP-derived road-mask extent as the background map. The marker does
+not draw a replacement centerline across bridges or pit branches and does
+not imply that vertex zero is the original race start/finish. The 1-bit
+source-derived silhouette remains cached in ROM; only nine tiny marker
+pixels are dynamic. Production-C synthetic regression verifies map
+orientation and border clipping; five user-ROM-derived GBA mGBA controller
+runs passed after the change.

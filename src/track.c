@@ -1087,7 +1087,25 @@ void track_map(volatile u16 *page, s32 index, s32 x0, s32 y0, s32 w, s32 h, u8 c
     const TrackDef *t = &g_tracks[index];
 #ifdef WITH_VRD_32X_TRACKS
     if(index>=TRACK_VRD_FIRST){
-        vrd32x_study_map(page,index-TRACK_VRD_FIRST,x0,y0,w,h,color);
+        const s32 slot=index-TRACK_VRD_FIRST;
+        vrd32x_study_map(page,slot,x0,y0,w,h,color);
+        // These are original source-ordered road nodes, no longer guessed
+        // skeleton loops. Animate a compact location dot without claiming
+        // the first node is the original official race start line.
+        if(dot_d>=0 && t->lap>0){
+            s32 distance=dot_d%t->lap;
+            for(s32 i=0;i<t->count;i++){
+                const TrackPt *pt=&t->pts[i];
+                if(distance<pt->dist || distance>=pt->dist+pt->len)
+                    continue;
+                s32 step=distance-pt->dist;
+                s32 road_x=pt->x+((pt->ux*step)>>14);
+                s32 road_z=pt->z+((pt->uz*step)>>14);
+                vrd32x_study_map_marker(page,slot,x0,y0,w,h,
+                                        road_x,road_z,dot_color);
+                break;
+            }
+        }
         return;
     }
 #endif
