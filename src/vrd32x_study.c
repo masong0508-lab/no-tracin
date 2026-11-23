@@ -27,7 +27,12 @@ s32 vrd32x_study_slot(void)
 #define VRD_SAMPLE_PITCH (1 << VRD_SAMPLE_SHIFT)
 #define VRD_TILE_SIZE (1 << VRD_TILE_SHIFT)
 #define VRD_TILE_MASK (VRD_TILE_SIZE - 1)
-static s32 sample(s32 slot,s32 x,s32 z)
+static s32 native_reference_height;
+void vrd32x_study_set_height_reference(s32 world_height_q8)
+{
+    native_reference_height=world_height_q8;
+}
+static s32 normal_sample(s32 slot,s32 x,s32 z)
 {
     if ((u32)slot >= TRACK_VRD_COUNT || (u32)x >= 16384 || (u32)z >= 16384)
         return -1;
@@ -46,6 +51,43 @@ static s32 sample(s32 slot,s32 x,s32 z)
 // sample belongs to unsupported/off-road space, use the last known road
 // sample rather than inventing a bridge across that gap. Q8 output, no heap
 // and no extra tables. Exact 32-unit grid vertices remain byte-identical.
+// Original 68000 source mode 3 has a physically distinct alternate
+// collision stream for its elevated bridge. Preserve both source
+// heights at identical X/Z rather than merging into a 2D surface.
+#ifdef VRD_HAS_NATIVE_OVERPASS
+static s32 overpass_sample(s32 x,s32 z)
+{
+    if((u32)x>=16384 || (u32)z>=16384)return -1;
+    u32 sx=(u32)x>>VRD_SAMPLE_SHIFT,sz=(u32)z>>VRD_SAMPLE_SHIFT;
+    u32 tile=(sz>>VRD_TILE_SHIFT)*64+(sx>>VRD_TILE_SHIFT);
+    u32 id=vrd_native_overpass_lookup[tile];
+    if(!id)return -1;
+    u16 h=vrd_native_overpass_heights[(id-1)*VRD_TILE_AREA+
+        (sz&VRD_TILE_MASK)*VRD_TILE_SIZE+(sx&VRD_TILE_MASK)];
+    return h==65535?-1:h;
+}
+#endif
+
+static s32 sample(s32 slot,s32 x,s32 z)
+{
+    s32 lower=normal_sample(slot,x,z);
+#ifdef VRD_HAS_NATIVE_OVERPASS
+    if(slot==3){
+        s32 upper=overpass_sample(x,z);
+        if(upper<0)return lower;
+        if(lower<0)return upper;
+        // Actual previous car altitude prevents crossing between source
+        // bridge and underpass collision levels at their intersection.
+        s32 du=upper*256-native_reference_height;
+        s32 dl=lower*256-native_reference_height;
+        if(du<0)du=-du;
+        if(dl<0)dl=-dl;
+        return du<dl?upper:lower;
+    }
+#endif
+    return lower;
+}
+
 static s32 smooth_height(s32 slot,s32 x,s32 z)
 {
     s32 a=sample(slot,x,z);
