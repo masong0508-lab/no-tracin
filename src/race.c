@@ -235,9 +235,7 @@ void race_begin(s32 track, s32 mode, Car *player)
     if (mode != RACE_ARCADE) lat = 0;
     track_point(d, lat, &x, &z, &y, &h, &hint);
 #ifdef WITH_VRD_32X_TRACKS
-    // If a course starts on an upper native plane, use its source route
-    // elevation BEFORE car_reset queries world_height for initial contact.
-    if(track>=TRACK_VRD_FIRST)
+    if (track>=TRACK_VRD_FIRST)
         vrd32x_study_set_height_reference(y*256);
 #endif
     car_reset(player, x, z, h);
@@ -473,6 +471,7 @@ void race_step(Car *player, s32 started)
                 player->safe_x = x;
                 player->safe_z = z;
                 player->safe_heading = player->heading;
+                player->safe_y = player->y;
                 safe_progress = g->progress;
                 safe_d = g->last_d;
             }
@@ -676,7 +675,7 @@ void race_hud(const Car *car, s32 frame)
     s32 study = 0;
 #endif
     if(study){
-        hud_text(6,3,"32X ROAD STUDY",0,PAL_YELLOW);
+        hud_text(6,3,"32X SOURCE DRIVE",0,PAL_YELLOW);
         hud_text_right(236,3,"FREE DRIVE",0,PAL_CYAN);
         hud_text_right(236,13,"NO LAP RESULTS",0,PAL_WHITE);
     }else if (g->mode == RACE_ARCADE) {

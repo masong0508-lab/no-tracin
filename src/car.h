@@ -20,6 +20,10 @@ typedef struct {
     s32 air_steps, launch_x, launch_z;
     s32 spin_p, spin_r, spin_h;
     s32 safe_x, safe_z, safe_heading, safe_timer;
+    // Q8 native road level at last supported recovery pose. Needed at the
+    // 32X Highland overpass where two original surfaces share the same X/Z.
+    // Runtime-only: Car is not part of the SRAM save format.
+    s32 safe_y;
     s32 skid, crash_kind;
     s32 event, event_a, event_b;
     s32 rpm, gear, shift_timer;  // automatic gearbox (gear 0 = reverse)

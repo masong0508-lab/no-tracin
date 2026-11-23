@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Private, hash-checked 32X road study importer for the GBA.
 
-Produces five *unnamed* free-drive road-study environments. Source road
-surfaces are sampled from the verified 68000 BSP+height equations, but the
-skeleton-derived staging routes, vertical/world conversion and graphics are
-study approximations, NOT original Sega races, polygon assets or AI paths.
+Produces five original-name course **road geometry** environments. The
+course-index correspondence is proven from verified 68000 selection and
+lookup code and the original Deluxe manual course order. Source collision
+surfaces/height planes are authentic, but staging routes, vertical scale,
+original SH-2 graphics and lap/finish mechanics remain EXPERIMENTAL, not
+finished Sega racing modes.
 
 Never alters the source ROM or commits generated user-owned game data.
 """
@@ -26,6 +28,8 @@ try:
     from tools.vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from tools.vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity, tile_priority_faces
     from tools.vrd32x_layered_course import layered_main_cycle
+    from tools.vrd32x_course_identity import verify_course_identity, COURSE_NAMES
+    from tools.vrd32x_native_routes import original_source_route
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface, signed16
     from export_vrd_32x_surface_mesh import grid_samples
@@ -33,13 +37,19 @@ except ModuleNotFoundError:
     from vrd32x_map_geometry import sampled_preview_bits, sampled_road_bounds
     from vrd32x_exact_bsp import mode_polygon_bounds, audit_mode_group_identity, tile_priority_faces
     from vrd32x_layered_course import layered_main_cycle
+    from vrd32x_course_identity import verify_course_identity, COURSE_NAMES
+    from vrd32x_native_routes import original_source_route
 
 GAME_WORLD = 16384
 HEIGHT_DIV = 32  # VISUAL/PHYSICS CALIBRATION ONLY; native units unverified
-ROAD_SUBDIV = 8
+ROAD_SUBDIV = 8   # 8=legacy; 16=higher-fidelity collisions, ROM-only
 SIDE = 64 * ROAD_SUBDIV
 PIXEL_WORLD = GAME_WORLD // SIDE
-MAX_POINTS = 230
+MAX_POINTS = 254  # GBA route segment indexes are u8; original 32X longest has 235
+# Respect the real course themes using EXISTING lightweight GBA scenes.
+# These are GBA approximations, NOT original Sega SH-2 scenery polygons.
+SOURCE_SCENES = ('SCENE_FOREST', 'SCENE_BAY', 'SCENE_MOUNTAINS',
+                 'SCENE_FOREST', 'SCENE_MOUNTAINS')
 
 
 def skeleton_route(mask):
@@ -72,7 +82,8 @@ def skeleton_route(mask):
 
 def make_route(heights, mask, slot, dist_to_edge, *, layered=None,
                bridge_heights=None, bridge_dist=None):
-    # Source layer 1 is only the real 68000 alternate mode-3 bridge.
+    # Layer 1 exists only for the actual original 68000 alternate overpass.
+    # It is NOT merged with lower-road height at the same planar crossing.
     pts=layered if layered is not None else [(0,y,x) for y,x in skeleton_route(mask)]
     raw_vals=[h for h in heights if h is not None]
     if bridge_heights is not None:
@@ -90,7 +101,8 @@ def make_route(heights, mask, slot, dist_to_edge, *, layered=None,
         nx=int(round(dx/length*16384)); nz=int(round(dz/length*16384))
         heading=round(math.atan2(dx,dz)/math.tau*65536)&65535
         raw=(bridge_heights if layer else heights)[y*SIDE+x]
-        if raw is None:raise ValueError('source route left its elevation layer')
+        if raw is None:
+            raise ValueError('layered main route left its exact source-height layer')
         height=max(8,min(800,int((raw-low)/HEIGHT_DIV)+12))
         radius=8000
         nxtnext=pts[(i+2)%len(pts)];ex=(nxtnext[2]-xn)*PIXEL_WORLD;ez=(nxtnext[1]-yn)*PIXEL_WORLD
@@ -136,21 +148,27 @@ def c_array(ctype,name,items,n=16):
 
 
 def exact_collision_tris(road, raw_minimum):
-    """Priority-resolved source 68000 collision triangles for private GBA ROM.
+    """Prioritized source 68000 collision triangles, not Sega SH-2 visuals.
 
-    These are NOT the original 32X SH-2 display/scenery meshes.
+    The GBA height transform is still a documented *study calibration*, and
+    a continuously evaluated source plane is rounded at each polygon vertex.
+    All vertex data stays in the private generated cartridge ROM.
     """
-    rows=[];starts=[];counts=[]
+    rows=[]
+    starts=[]
+    counts=[]
     for tile in range(4096):
         starts.append(len(rows))
         before=len(rows)
         if road.grid[tile] == road.background:
-            counts.append(0);continue
+            counts.append(0)
+            continue
         cy,cx=divmod(tile,64)
         start=road.bank_start+2*road.grid[tile]
         for face in tile_priority_faces(road,cy,cx):
             poly=face.polygon
-            if len(poly)<3:continue
+            if len(poly)<3:
+                continue
             pos=start+2+28*face.group
             ax=signed16(be16(road.rom,pos+18))
             az=signed16(be16(road.rom,pos+20))
@@ -165,7 +183,10 @@ def exact_collision_tris(road, raw_minimum):
                 corners.append((gx,gy,gz))
             for k in range(1,len(corners)-1):
                 a,b,c=corners[0],corners[k],corners[k+1]
-                if (b[0]-a[0])*(c[2]-a[2]) == (c[0]-a[0])*(b[2]-a[2]):continue
+                # 2D zero-area triangles collapse after GBA coordinate
+                # conversion. Never add invisible geometry to the queue.
+                if (b[0]-a[0])*(c[2]-a[2]) == (c[0]-a[0])*(b[2]-a[2]):
+                    continue
                 if not all(0<=p[0]<GAME_WORLD and 0<=p[2]<GAME_WORLD for p in (a,b,c)):
                     raise ValueError('native BSP triangle outside GBA world')
                 rows.append(a+b+c)
@@ -184,6 +205,7 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
     # RoadSurface then reuses that immutable verified image (not five deep
     # reparses of every 4096-cell mode).
     inspect_image(source,require_identity=True)
+    course_identity=verify_course_identity(source,verify_full_rom=False)
     output.mkdir(parents=True,exist_ok=True)
     data=['// PRIVATE GENERATED source-ROM-derived road height tiles. Do NOT commit.',
           '// Source SHA256 '+ROM_SHA256,
@@ -204,16 +226,17 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         bridge_mask=None
         bridge_report=None
         if slot==3:
-            # Original 68000 mode 3 has a DIFFERENT alternate lookup for
-            # its actual elevated road. It overlaps a lower native road.
+            # THE original 68000 contains an independently selected elevated
+            # overpass lookup for mode 3. It closes the otherwise-broken
+            # circuit and crosses the original underpass at a different Y.
             bridge_surface=RoadSurface(source,3,True,verify_identity=False)
             bridge_side,bridge_samples=grid_samples(bridge_surface,ROAD_SUBDIV)
-            if bridge_side!=SIDE:raise ValueError('native 32X overpass grid mismatch')
+            if bridge_side!=SIDE:raise ValueError('source overpass sampling mismatch')
             bridge_mask=np.array([h is not None for h in bridge_samples],dtype=bool).reshape((SIDE,SIDE))
-            audit=audit_mode_group_identity(
+            bridge_audit=audit_mode_group_identity(
                 bridge_surface,sample_points=(0,128,256,384,511))
-            if not audit['first_match_source_parity']:
-                raise ValueError('authentic alternate source BSP mismatch')
+            if not bridge_audit['first_match_source_parity']:
+                raise ValueError('source alternate 68000 BSP collision mismatch')
         # Road coverage is from authenticated source BSP hits, NOT the
         # skeleton loop. Retain the +Z image coordinate convention.
         # Exact *source 68000 BSP* regions may include thin roads missed
@@ -244,16 +267,21 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         previews.append(preview_name)
         data.append(c_array('u8',preview_name,preview,32))
         distmap=distance_transform_edt(mask)
-        if bridge_surface is not None:
-            layered,bridge_report=layered_main_cycle(
-                mask,bridge_mask,samples,bridge_samples,
-                world_per_pixel=PIXEL_WORLD,max_points=MAX_POINTS)
-            route,lap,minimum=make_route(
-                samples,mask,slot,distmap,layered=layered,
-                bridge_heights=bridge_samples,
-                bridge_dist=distance_transform_edt(bridge_mask))
-        else:
-            route,lap,minimum=make_route(samples,mask,slot,distmap)
+        bridge_dist=distance_transform_edt(bridge_mask) if bridge_surface is not None else None
+        raw_valid=[h for h in samples if h is not None]
+        if bridge_samples is not None:
+            raw_valid.extend(h for h in bridge_samples if h is not None)
+        if not raw_valid: raise ValueError('source 32X main road is empty')
+        minimum=min(raw_valid)
+        # Core correction: the owner cartridge contains a distinct ordered
+        # source 68000 X/Z COORDINATE LOOP for each actual named course.
+        # Its source scene $898A04 first pointer reaches these points.
+        # The old skeleton cycle was only provisional. Refuse to generate
+        # a game pack if source route or native BSP road heights disagree.
+        route,lap,source_route_audit=original_source_route(
+            source,slot,surface,bridge_surface,minimum,distmap,bridge_dist,
+            pitch=PIXEL_WORLD,max_points=MAX_POINTS)
+        bridge_report=source_route_audit if bridge_surface is not None else None
         first,count,flat=grid_lists(route)
         if exact_mesh:
             exact_first,exact_counts,exact_tris=exact_collision_tris(surface,minimum)
@@ -263,8 +291,8 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
             meshes.append(stem+'_tris')
             data.append(c_array('u16',mesh_firsts[-1],exact_first,16))
             data.append(c_array('u16',mesh_counts[-1],exact_counts,16))
-            data.append('static const VrdSourceTri '+meshes[-1]+'['+str(len(exact_tris)) + '] = {' + chr(10) +
-                        (','+chr(10)).join('    {{'+', '.join(map(str,tri))+'}}' for tri in exact_tris) + chr(10) + '};')
+            data.append('static const VrdSourceTri '+meshes[-1]+'['+str(len(exact_tris)) + '] = {\n' +
+                        ',\n'.join('    {{'+', '.join(map(str,tri))+'}}' for tri in exact_tris) + '\n};')
         active=[];chunkmap=[];tiles=[]
         for cell in range(4096):
             cy,cx=divmod(cell,64);sub=[]
@@ -276,7 +304,8 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
             else:
                 active.append(cell);chunkmap.append(len(active));tiles+=sub
         if bridge_surface is not None:
-            # ROM-only independent source height grid for native upper road.
+            # Each native alternate pixel is kept in a distinct ROM-only
+            # height table. Overlaps must NOT collapse into a flat 2D union.
             alt_active=[];alt_lookup=[];alt_tiling=[]
             for cell in range(4096):
                 cy,cx=divmod(cell,64);sub=[]
@@ -285,13 +314,13 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                         h=bridge_samples[(cy*ROAD_SUBDIV+row)*SIDE+(cx*ROAD_SUBDIV+col)]
                         sub.append(65535 if h is None else
                                    max(8,min(800,int((h-minimum)/HEIGHT_DIV)+12)))
-                if all(h==65535 for h in sub):alt_lookup.append(0)
+                if all(h==65535 for h in sub): alt_lookup.append(0)
                 else:
                     alt_active.append(cell);alt_lookup.append(len(alt_active));alt_tiling+=sub
             coords=np.argwhere(bridge_mask)
             minz,minx=coords.min(axis=0);maxz,maxx=coords.max(axis=0)
-            # Only four ROM bounds; skip pointless alternate road draw
-            # sampling when Highland's car is away from its real bridge.
+            # Four immutable bounds, no RAM; avoid 64 redundant per-frame
+            # source bridge-tile probes when the player is far away.
             data.append('static const u16 vrd_native_bridge_bounds[4] = {'+
                         ', '.join(map(str,(int(minx)*PIXEL_WORLD,
                                            int(maxx+1)*PIXEL_WORLD-1,
@@ -312,10 +341,12 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         routes.append(c_array('u8',stem+'_cell_count',count,32))
         routes.append(c_array('u8',stem+'_cell_list',flat,32))
         routes.append(c_array('u16',stem+'_half_widths',[p['half_width'] for p in route],20))
-        defs.append(f'{{ "32X SLOT {slot}", "ROAD STUDY", {stem}_pts, {len(route)}, {lap}, '+
+        defs.append(f'{{ "{COURSE_NAMES[slot]}", "SOURCE ROAD", {stem}_pts, {len(route)}, {lap}, '+
                     f'{stem}_cell_first, {stem}_cell_count, {stem}_cell_list, '+
-                    f'0, 0, 0, 0, 0, 0, 0, 0, 3, 180, 90, SCENE_MOUNTAINS, {stem}_half_widths }}')
-        statistics.append(dict(slot=slot,route_points=len(route),staging_route_length=lap,
+                    f'0, 0, 0, 0, 0, 0, 0, 0, 3, 180, 90, {SOURCE_SCENES[slot]}, {stem}_half_widths }}')
+        statistics.append(dict(slot=slot,original_course_name=COURSE_NAMES[slot],
+                               name_mapping_original_68000_source_verified=True,
+                               route_points=len(route),staging_route_length=lap,
                                road_tile_count=len(active),valid_sample_pixels=int(mask.sum()),
                                native_collision_triangle_count=len(exact_tris) if exact_mesh else None,
                                sample_subdivision=ROAD_SUBDIV,
@@ -326,13 +357,16 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                                native_integer_bsp_region_audit=region_audit,
                                source_preview_rom_bytes=len(preview),
                                min_raw_plane_height=minimum,calibrated_height_divisor=HEIGHT_DIV,
+                               original_68000_ordered_main_road=source_route_audit,
+                               original_ordered_route_verified=True,
+                               approximate_gba_scene_name=SOURCE_SCENES[slot],
+                               original_sh2_scenery_verified=False,
+                               original_start_finish_verified=False,
                                layered_alternate_68000_source_route=bridge_report,
                                native_alternate_road_tiles=len(alt_active) if bridge_surface is not None else 0,
                                native_alternate_road_samples=int(bridge_mask.sum()) if bridge_surface is not None else 0,
-                               route_type=('source_normal_and_alternate_3d_layered_loop'
-                                           if bridge_report is not None else
-                                           'skeleton_cycle_NOT_authentic_start_finish_or_lap'),
-                               geometry='private_68000_BSP_sampled_ROAD_STUDY'))
+                               route_type='ORIGINAL_ORDERED_68000_SOURCE_ROAD_NOT_LAP_VERIFIED',
+                               geometry='private_68000_BSP_SOURCE_MAIN_ROAD_AND_HEIGHT'))
     routes.append('#define VRD32X_STUDY_TRACK_DEFS \\\n    '+', \\\n    '.join(defs))
     # Four immutable u16s per mode in ROM, no extra runtime EWRAM or heap.
     data.append('static const u16 vrd_study_preview_bounds[5][4] = {' + chr(10) +
@@ -349,8 +383,10 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
     data.append('static const u16 *const vrd_study_heights[5] = { '+', '.join(heights_all)+' };')
     for filename,content in [('vrd32x_study_tracks.h','\n\n'.join(routes)+'\n'),('vrd32x_study_data.h','\n\n'.join(data)+'\n')]:
         (output/filename).write_text(content)
-    report=dict(source_sha256=ROM_SHA256,import_type='PRIVATE_32X_BSP_ROAD_STUDY_NOT_AUTHENTIC_RACES',
-                named_course_ids_verified=False,source_poly_meshes_recovered=False,
+    report=dict(source_sha256=ROM_SHA256,import_type='PRIVATE_32X_NAMED_COURSE_SOURCE_ROADS_NOT_AUTHENTIC_RACES',
+                named_course_ids_verified=True,source_course_identity=course_identity,
+                authentic_ordered_main_road_geometry_verified=True,
+                original_competitive_races_complete=False,source_poly_meshes_recovered=False,
                 physics_height_scale_verified=False,lap_start_finish_verified=False,
                 native_collision_mesh_in_gba=exact_mesh,
                 adjustable_handling_and_motion_options_preserved=True,slots=statistics)
@@ -362,15 +398,15 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--rom',type=Path,required=True)
     p.add_argument('--out-dir',type=Path,required=True)
-    p.add_argument('--exact-mesh',action='store_true',help='private source BSP road polygons for close-up render')
+    p.add_argument('--exact-mesh',action='store_true',help='private source BSP collision triangles for close GBA detail')
     p.add_argument('--samples-per-cell',type=int,choices=(8,16),default=8,
-                   help='8=legacy, 16=denser native-source collision sampling')
+                   help='Private ROM sampling density; 16 doubles linear collision precision')
     a=p.parse_args()
-    global SIDE,ROAD_SUBDIV,PIXEL_WORLD
+    global SIDE, ROAD_SUBDIV, PIXEL_WORLD
     ROAD_SUBDIV=a.samples_per_cell
     SIDE=64*ROAD_SUBDIV
     PIXEL_WORLD=GAME_WORLD//SIDE
     report=write_pack(a.rom.read_bytes(),a.out_dir,exact_mesh=a.exact_mesh)
-    print('Private 32X road-study pack:',[(s['slot'],s['route_points'],s['road_tile_count']) for s in report['slots']])
+    print('Private 32X original course road pack:',[(s['slot'],s['route_points'],s['road_tile_count']) for s in report['slots']])
 
 if __name__=='__main__':main()

@@ -370,8 +370,12 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
             s32 stride=230/choices, x0=4+i*stride, on=i==course;
             const char *name = g_tracks[first + i].name;
 #ifdef WITH_VRD_32X_TRACKS
-            char shortname[8];
-            if(set==TRACK_SET_VRD) { shortname[0]='S';shortname[1]='L';shortname[2]='O';shortname[3]='T';shortname[4]=' ';shortname[5]='0'+i;shortname[6]=0; name=shortname; }
+            // Original source course indices map to the five named 32X
+            // tracks. Tabs stay compact; the full name is shown at right.
+            static const char *const source_tabs[TRACK_VRD_COUNT] = {
+                "FOREST", "BRIDGE", "ACRO", "HIGHLND", "SAND"
+            };
+            if(set==TRACK_SET_VRD) name=source_tabs[i];
 #endif
             box(page, x0, 44, x0 + stride-2, 60, on ? C_RED : C_PANEL, on ? C_YELLOW : C_GREY);
             hud_text(x0 + stride/2 - hud_text_width(name, 0) / 2, 49, name, 0,
@@ -385,10 +389,10 @@ static s32 course_select(s32 *t, s32 *sel, s32 mode)
         hud_text(130, 72, td->level, 0, level_pal[course]);
 #ifdef WITH_VRD_32X_TRACKS
         if(set==TRACK_SET_VRD){
-            hud_text(130, 86, "BSP ROAD DATA", 0, PAL_WHITE);
-            hud_text(130, 100, "SAMPLED HEIGHT", 0, PAL_CYAN);
+            hud_text(130, 86, td->name, 0, PAL_YELLOW);
+            hud_text(130, 100, "NATIVE 32X ROAD", 0, PAL_CYAN);
             hud_text(130, 114, "NO LAP RECORDS", 0, PAL_WHITE);
-            hud_text(130, 130, "ROUTE UNVERIFIED", 0, PAL_YELLOW);
+            hud_text(130, 130, "START UNVERIFIED", 0, PAL_YELLOW);
         } else
 #endif
         {

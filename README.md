@@ -4,25 +4,6 @@ A stunt-driving game for the Game Boy Advance: Race Drivin' (Genesis) mixed with
 
 The standard `notracin.gba` build uses this project's own code and assets. The optional original-course build described below imports course data from a locally supplied Virtua Racing ROM. Source ROMs and generated imported assets are kept outside the tracked source tree.
 
-## Owner's 32X source-road playable milestone (November 22, 2026)
-
-**Do not restart this milestone from scratch.** The [owner-private 32X
-playable checkpoint and validation report](docs/OWNER_32X_PLAYABLE_MILESTONE_20261122.md)
-records the precise verified cartridge identity, complete build recipe,
-two GNU ARM GBA variants, five-mode controller-driven mGBA test results,
-memory/FPS budgets, and outstanding original-course reconstruction gates.
-
-Use `make vr32x-owned VR32X_ROM="/path/to/your/Virtua Racing Deluxe (USA).32x" VR32_DETAIL=16`
-with the owner-provided US 32X image to build **eight playable
-environments** (three custom races plus five 32X authenticated 68000
-BSP-source **Free Drives**). Press L/R at the course-select screen. The
-five 32X drives are *still not authenticated named Sega Deluxe races*;
-their source polygon roads are derived from original collision data,
-but original SH-2 scenery, pit/branch race routes, start/finish and
-the exact source height scale remain unfinished. The user's source
-cartridge, native exported geometry and generated private headers are
-intentionally excluded from GitHub.
-
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
 - Turn on "skip BIOS intro" if your emulator asks. The ROM header has no Nintendo logo, so the real BIOS intro won't boot it.

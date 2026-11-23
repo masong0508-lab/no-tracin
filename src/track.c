@@ -40,7 +40,7 @@ const TrackDef *g_track;
 const char *track_set_name(s32 set)
 {
 #ifdef WITH_VRD_32X_TRACKS
-    if (set == TRACK_SET_VRD) return "32X ROAD STUDIES";
+    if (set == TRACK_SET_VRD) return "32X ORIGINAL ROADS";
 #endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     if (set == TRACK_SET_ORIGINAL) return "VR ORIGINALS";

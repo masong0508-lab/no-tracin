@@ -95,11 +95,20 @@ void car_reset(Car *c, s32 x, s32 z, s32 heading)
     c->safe_x = x;
     c->safe_z = z;
     c->safe_heading = heading;
+    c->safe_y = c->y;
     sb_invalidate();
 }
 
 void car_respawn(Car *c)
 {
+#ifdef WITH_VRD_32X_TRACKS
+    // car_reset clears the Car before querying world height. If we are
+    // recovering on the original Highland bridge, the most recent fallen
+    // height can be on the UNDERPASS even when our safe pose is on the
+    // OVERPASS. Choose the saved road's original elevation first.
+    if (vrd32x_study_slot() >= 0)
+        vrd32x_study_set_height_reference(c->safe_y);
+#endif
     car_reset(c, c->safe_x, c->safe_z, c->safe_heading);
     if (g_track) race_on_respawn(c);
 }
@@ -746,7 +755,10 @@ static void gearbox(Car *c, u16 keys)
 void car_step(Car *c, u16 keys)
 {
 #ifdef WITH_VRD_32X_TRACKS
-    if(vrd32x_study_slot()>=0)
+    // Propagate the car's previous actual elevation into the source-based
+    // Highland overpass/underpass selector. This avoids collapsing two
+    // distinct native 68000 collision planes into one fictitious bridge.
+    if (vrd32x_study_slot()>=0)
         vrd32x_study_set_height_reference(c->y);
 #endif
     c->hit = 0;
