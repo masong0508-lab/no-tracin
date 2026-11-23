@@ -4,6 +4,7 @@
 #include "track.h"
 #include "world.h"
 #include "vrd32x_study.h"
+typedef struct { s16 xyz[9]; } VrdSourceTri;
 #include "vrd32x_study_data.h"  // privately generated, ignored by Git
 
 s32 vrd32x_study_slot(void)
@@ -16,15 +17,26 @@ s32 vrd32x_study_slot(void)
 // 512x512 raster = 64x64 verified 32X cells, 8 samples/cell. In GBA
 // coordinates each sample represents 32x32 world units. 0 means no tile;
 // 0xFFFF means an unsupported/offroad sample, never interpreted as height.
+// Generated high-detail tiles have 16 samples per source BSP cell; legacy
+// donor and synthetic builds use 8. All large samples remain ROM-only.
+#ifndef VRD_SAMPLE_SHIFT
+#define VRD_SAMPLE_SHIFT 5
+#define VRD_TILE_SHIFT 3
+#define VRD_TILE_AREA 64
+#endif
+#define VRD_SAMPLE_PITCH (1 << VRD_SAMPLE_SHIFT)
+#define VRD_TILE_SIZE (1 << VRD_TILE_SHIFT)
+#define VRD_TILE_MASK (VRD_TILE_SIZE - 1)
 static s32 sample(s32 slot,s32 x,s32 z)
 {
     if ((u32)slot >= TRACK_VRD_COUNT || (u32)x >= 16384 || (u32)z >= 16384)
         return -1;
-    u32 sx=(u32)x>>5, sz=(u32)z>>5;
-    u32 tile=(sz>>3)*64+(sx>>3);
+    u32 sx=(u32)x>>VRD_SAMPLE_SHIFT, sz=(u32)z>>VRD_SAMPLE_SHIFT;
+    u32 tile=(sz>>VRD_TILE_SHIFT)*64+(sx>>VRD_TILE_SHIFT);
     u32 id=vrd_study_lookups[slot][tile];
     if (!id) return -1;
-    u16 height=vrd_study_heights[slot][(id-1)*64+(sz&7)*8+(sx&7)];
+    u16 height=vrd_study_heights[slot][(id-1)*VRD_TILE_AREA+
+              (sz&VRD_TILE_MASK)*VRD_TILE_SIZE+(sx&VRD_TILE_MASK)];
     return height==65535 ? -1 : height;
 }
 
@@ -38,26 +50,27 @@ static s32 smooth_height(s32 slot,s32 x,s32 z)
 {
     s32 a=sample(slot,x,z);
     if(a<0) return -1;
-    s32 fx=x&31,fz=z&31;
+    s32 fx=x&(VRD_SAMPLE_PITCH-1),fz=z&(VRD_SAMPLE_PITCH-1);
     if(!fx && !fz) return a*256;
     s32 b=a,c=a,d=a;
     if(fx) {
-        b=sample(slot,x+32,z);
+        b=sample(slot,x+VRD_SAMPLE_PITCH,z);
         if(b<0) return a*256;
     }
     if(fz) {
-        c=sample(slot,x,z+32);
+        c=sample(slot,x,z+VRD_SAMPLE_PITCH);
         if(c<0) return a*256;
     }
     if(fx && fz) {
-        d=sample(slot,x+32,z+32);
+        d=sample(slot,x+VRD_SAMPLE_PITCH,z+VRD_SAMPLE_PITCH);
         if(d<0) return a*256;
     }else if(fx) d=b;
     else d=c;
     // Raw samples are 8..800. All intermediates fit signed 32-bit.
-    s32 h0=a*32+(b-a)*fx;
-    s32 h1=c*32+(d-c)*fx;
-    return (h0*(32-fz)+h1*fz)/4;
+    s32 h0=a*VRD_SAMPLE_PITCH+(b-a)*fx;
+    s32 h1=c*VRD_SAMPLE_PITCH+(d-c)*fx;
+    return (h0*(VRD_SAMPLE_PITCH-fz)+h1*fz)/
+           ((VRD_SAMPLE_PITCH*VRD_SAMPLE_PITCH)/256);
 }
 
 s32 vrd32x_study_height(s32 slot,s32 x,s32 z)
@@ -108,13 +121,42 @@ void vrd32x_study_draw(s32 slot,s32 focus_x,s32 focus_z,s32 frame)
         if (!r_visible(x+128,z+128,190)) continue;
         ground_quad(x,z,256,0,0,0,0,COLOR(M_GRASS,(ix+iz)&1));
     }
-    // Render ONLY the nearby authenticated surface sample cells. Sample
-    // at a coarser 64-unit graphics LOD than the 32-unit collision raster.
-    // Max 19x19 candidates, <=180 surface faces, bounded render queue.
+    // Optional near source BSP triangles are partitioned by original
+    // first-height-plane priority during private ROM import. They are 68000
+    // collision geometry, NOT Sega's original SH-2 scenery meshes.
+    s32 exact_faces=0;
+#ifdef VRD_EXACT_SOURCE_MESH
+    s32 tcx=focus_x>>8,tcz=focus_z>>8;
+    for(s32 tz=tcz-1;tz<=tcz+1 && exact_faces<100;tz++)
+        for(s32 tx=tcx-1;tx<=tcx+1 && exact_faces<100;tx++){
+            if((u32)tx>=64 || (u32)tz>=64)continue;
+            s32 tile=tz*64+tx;
+            if(!r_visible(tx*256+128,tz*256+128,200))continue;
+            const VrdSourceTri *tris=vrd_exact_tris[slot];
+            s32 start=vrd_exact_first[slot][tile],count=vrd_exact_count[slot][tile];
+            for(s32 k=0;k<count && exact_faces<100;k++){
+                const VrdSourceTri *p=&tris[start+k];
+                s32 mx=(p->xyz[0]+p->xyz[3]+p->xyz[6])/3;
+                s32 mz=(p->xyz[2]+p->xyz[5]+p->xyz[8])/3;
+                if(!r_visible(mx,mz,180))continue;
+                Vec3 v[3]={{p->xyz[0],p->xyz[1],p->xyz[2]},
+                           {p->xyz[3],p->xyz[4],p->xyz[5]},
+                           {p->xyz[6],p->xyz[7],p->xyz[8]}};
+                r_ground(v,3,COLOR(M_ASPHALT,((tx+tz)&1)));
+                exact_faces++;
+            }
+        }
+#endif
+    // Distant sourced road uses the original coarse graphics LOD.
+    // Total source road face budget remains <=180. No heap/framebuffer.
     s32 base_x=(focus_x/64)*64-576,base_z=(focus_z/64)*64-576;
-    s32 faces=0;
+    s32 faces=exact_faces;
     for(s32 j=0;j<18 && faces<180;j++)for(s32 i=0;i<18 && faces<180;i++){
         s32 x=base_x+i*64,z=base_z+j*64;
+#ifdef VRD_EXACT_SOURCE_MESH
+        if(x>=focus_x-192 && x<focus_x+192 &&
+           z>=focus_z-192 && z<focus_z+192)continue;
+#endif
         if(!r_visible(x+32,z+32,66))continue;
         s32 a=sample(slot,x,z),b=sample(slot,x,z+64);
         s32 c=sample(slot,x+64,z+64),d=sample(slot,x+64,z);
