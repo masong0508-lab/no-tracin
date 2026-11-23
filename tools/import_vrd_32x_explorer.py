@@ -177,9 +177,10 @@ def write_pack(source:bytes,output:Path):
                                geometry='private_68000_BSP_sampled_ROAD_STUDY'))
     routes.append('#define VRD32X_STUDY_TRACK_DEFS \\\n    '+', \\\n    '.join(defs))
     # Four immutable u16s per mode in ROM, no extra runtime EWRAM or heap.
-    data.append('static const u16 vrd_study_preview_bounds[5][4] = {\\n    ' +
-                ',\\n    '.join('{ '+', '.join(map(str, b))+' }' for b in road_bounds) +
-                '\\n};')
+    data.append('static const u16 vrd_study_preview_bounds[5][4] = {' + chr(10) +
+                '    ' + (',' + chr(10) + '    ').join(
+                    '{ '+', '.join(map(str, b))+' }' for b in road_bounds) +
+                chr(10) + '};')
     data.append('static const u16 *const vrd_study_lookups[5] = { '+', '.join(lookups)+' };')
     data.append('static const u16 *const vrd_study_heights[5] = { '+', '.join(heights_all)+' };')
     for filename,content in [('vrd32x_study_tracks.h','\n\n'.join(routes)+'\n'),('vrd32x_study_data.h','\n\n'.join(data)+'\n')]:
