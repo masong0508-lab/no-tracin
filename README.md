@@ -48,6 +48,10 @@ heap, IWRAM or EWRAM. See
 This is not an authenticated port of the original SH-2 scene models or
 competitive start/finish/AI rules; those remain explicitly unfinished.
 
+## November 23 source-road FPS milestone
+
+The owner-private 32X landscape build now uses **ROM-only original-route ribbon geometry and conservative visibility groups**, preserving the existing 68000-authenticated road layouts, Highland bridge, and GBA-native scenery. [See reproducible source tests, pixel-identical visual comparison, unchanged driving progress, and measured five-course FPS](docs/32X_SOURCE_ROM_RIBBON_RENDER_FPS_PASS_20261123.md). This does not claim Sega SH-2 scenery or full original competitive race systems have been recovered. The commercial source ROM and owner-only generated assets are never in this public repository.
+
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
 - Turn on "skip BIOS intro" if your emulator asks. The ROM header has no Nintendo logo, so the real BIOS intro won't boot it.

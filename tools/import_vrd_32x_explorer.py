@@ -32,6 +32,7 @@ try:
     from tools.vrd32x_native_routes import original_source_route
     from tools.vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
     from tools.vrd32x_render_candidates import raster_road_candidates
+    from tools.vrd32x_ribbon_mesh import original_ribbon_quads, conservative_visibility_groups
 except ModuleNotFoundError:
     from decode_vrd_32x_surface import RoadSurface, signed16
     from export_vrd_32x_surface_mesh import grid_samples
@@ -43,6 +44,7 @@ except ModuleNotFoundError:
     from vrd32x_native_routes import original_source_route
     from vrd32x_visual_terrain import terrain_from_source, ribbon_overdraw_skip
     from vrd32x_render_candidates import raster_road_candidates
+    from vrd32x_ribbon_mesh import original_ribbon_quads, conservative_visibility_groups
 
 GAME_WORLD = 16384
 HEIGHT_DIV = 32  # VISUAL/PHYSICS CALIBRATION ONLY; native units unverified
@@ -221,6 +223,7 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
     defs=[];lookups=[];heights_all=[];statistics=[];road_bounds=[];previews=[]
     mesh_firsts=[];mesh_counts=[];meshes=[]
     terrain_heights=[];terrain_covers=[];scenery_names=[];scenery_counts=[]
+    ribbon_names=[];ribbon_group_names=[];ribbon_group_counts=[]
     for slot in range(5):
         surface=RoadSurface(source,slot,verify_identity=False)
         side,samples=grid_samples(surface,ROAD_SUBDIV)
@@ -306,6 +309,23 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
         data.append('static const VrdScenery '+prop_name+'['+str(len(props))+
                     '] = {\n'+',\n'.join('    { '+', '.join(map(str,item))+
                         ' }' for item in props)+'\n};')
+        # Source-authenticated ordered route is the only source of the
+        # existing visible asphalt ribbon. Precompute the SAME signed shift
+        # corner math that the previous C renderer executed every frame.
+        # Group spheres are conservative: child r_visible() always wins.
+        quads=original_ribbon_quads(route)
+        groups=conservative_visibility_groups(quads)
+        name=f'vrd_native_ribbon_quad_{slot}'
+        group_name=f'vrd_native_ribbon_group_{slot}'
+        ribbon_names.append(name)
+        ribbon_group_names.append(group_name)
+        ribbon_group_counts.append(len(groups))
+        data.append('static const VrdRoadRibbon '+name+f'[{len(quads)}] = {{\n'+
+                    ',\n'.join('    { {'+', '.join(map(str,q.xyz))+'}, '+
+                                ', '.join(map(str,(q.mx,q.mz,q.reach,q.shade,q.short_mark)))+' }'
+                                for q in quads)+'\n};')
+        data.append('static const VrdRoadGroup '+group_name+f'[{len(groups)}] = {{\n'+
+                    ',\n'.join('    { '+', '.join(map(str,g))+' }' for g in groups)+'\n};')
         first,count,flat=grid_lists(route)
         if exact_mesh:
             exact_first,exact_counts,exact_tris=exact_collision_tris(surface,minimum)
@@ -388,6 +408,9 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                                source_collision_anchored_gba_visual_props=len(props),
                                original_road_render_candidate_cells=sum(v.bit_count() for v in native_candidates),
                                original_road_render_candidate_rom_bytes=len(native_candidates),
+                               original_ribbon_source_mesh_rom_bytes=32*len(quads),
+                               original_ribbon_conservative_group_count=len(groups),
+                               original_ribbon_per_frame_mesh_arithmetic=False,
                                original_sh2_terrain_and_props_recovered=False,
                                original_sh2_scenery_verified=False,
                                original_start_finish_verified=False,
@@ -403,6 +426,12 @@ def write_pack(source:bytes,output:Path, *, exact_mesh=False):
                     '{ '+', '.join(map(str, b))+' }' for b in road_bounds) +
                 chr(10) + '};')
     data.append('#define VRD_NATIVE_SCENE 1')
+    data.append('#define VRD_ROM_RIBBON_MESH 1')
+    data.append('static const VrdRoadRibbon *const vrd_native_ribbon_quads[5] = {'+
+                ', '.join(ribbon_names)+' };')
+    data.append('static const VrdRoadGroup *const vrd_native_ribbon_groups[5] = {'+
+                ', '.join(ribbon_group_names)+' };')
+    data.append(c_array('u8','vrd_native_ribbon_group_count',ribbon_group_counts,16))
     data.append('static const u16 *const vrd_native_terrain_height[5] = { '+
                 ', '.join(terrain_heights)+' };')
     data.append('static const u8 *const vrd_native_terrain_cover[5] = { '+

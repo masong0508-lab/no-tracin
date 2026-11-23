@@ -80,6 +80,7 @@ class NativeTerrainSourceTests(unittest.TestCase):
             (folder/'vrd32x_study_data.h').write_text(r'''
 // Completely invented 16-sample original-source-raster fixture.
 #define VRD_NATIVE_SCENE 1
+#define VRD_ROM_RIBBON_MESH 1
 #define VRD_SAMPLE_SHIFT 4
 #define VRD_TILE_SHIFT 4
 #define VRD_TILE_AREA 256
@@ -104,6 +105,18 @@ static const u8 *const vrd_native_raster_candidates[5]={candidates,candidates,ca
 static const VrdScenery props[1]={{520,42,520,16384,0,0,80}};
 static const VrdScenery *const vrd_native_scenery[5]={props,props,props,props,props};
 static const u8 vrd_native_scenery_count[5]={1,1,1,1,1};
+// Invented ROM ribbon geometry: test the production C fast path without
+// original source cartridge bytes or any private generated asset.
+static const VrdRoadRibbon ribbons[4] = {
+  [0 ... 3] = { {413,29,480,413,29,608,547,29,608,547,29,480},
+                 480,544,244,0,1 }
+};
+static const VrdRoadGroup groups[1]={{480,544,800}};
+static const VrdRoadRibbon *const vrd_native_ribbon_quads[5]={
+  ribbons,ribbons,ribbons,ribbons,ribbons};
+static const VrdRoadGroup *const vrd_native_ribbon_groups[5]={
+  groups,groups,groups,groups,groups};
+static const u8 vrd_native_ribbon_group_count[5]={1,1,1,1,1};
 ''')
             (folder/'probe.c').write_text(r'''
 #include <assert.h>

@@ -8,6 +8,10 @@ typedef struct { s16 xyz[9]; } VrdSourceTri;
 // Generated ROM-only props are anchored to authenticated source road
 // coordinates. They are adapted GBA scenery, not original Sega SH-2 meshes.
 typedef struct { s16 x,y,z,ux,uz; u8 kind,size; } VrdScenery;
+// Precomputed from the SAME original 68000 route and width arithmetic as
+// the old per-frame ribbon path. Kept in ROM, not a new framebuffer.
+typedef struct { s16 xyz[12], mx,mz; u16 reach; u8 shade,short_mark; } VrdRoadRibbon;
+typedef struct { s16 mx,mz; u16 reach; } VrdRoadGroup;
 #include "vrd32x_study_data.h"  // privately generated, ignored by Git
 
 s32 vrd32x_study_slot(void)
@@ -262,6 +266,25 @@ static void draw_native_source_road(s32 slot)
     s32 drawn=0,edges=0;
     for(s32 i=0;i<t->count && drawn<24;i++){
         const TrackPt *a=&t->pts[i],*b=&t->pts[i+1==t->count?0:i+1];
+#ifdef VRD_ROM_RIBBON_MESH
+        // Conservative 8-segment source-road spheres skip invisible route
+        // stretches. They can NEVER reject a segment passing r_visible().
+        // Source route points still drive physics, AI-neutral free drive
+        // selection, and every drawn road location.
+        const VrdRoadGroup *group=&vrd_native_ribbon_groups[slot][i>>3];
+        if((i&7)==0 && !r_visible(group->mx,group->mz,group->reach)){
+            i+=7;
+            continue;
+        }
+        const VrdRoadRibbon *q=&vrd_native_ribbon_quads[slot][i];
+        s32 mx=q->mx,mz=q->mz;
+        if(!r_visible(mx,mz,q->reach))continue;
+        Vec3 v[4]={ {q->xyz[0],q->xyz[1],q->xyz[2]},
+                    {q->xyz[3],q->xyz[4],q->xyz[5]},
+                    {q->xyz[6],q->xyz[7],q->xyz[8]},
+                    {q->xyz[9],q->xyz[10],q->xyz[11]} };
+        r_ground(v,4,COLOR(M_ASPHALT,q->shade));
+#else
         s32 mx=(a->x+b->x)/2,mz=(a->z+b->z)/2;
         if(!r_visible(mx,mz,180+a->len/2))continue;
         s32 wa=(t->half_widths[i]*3)/4;
@@ -279,6 +302,7 @@ static void draw_native_source_road(s32 slot)
         s32 delta=a->y-b->y;
         if(delta<0)delta=-delta;
         r_ground(v,4,COLOR(M_ASPHALT,delta>36?1:0));
+#endif
         drawn++;
         // Quiet lane-edge marks instead of noisy checkerboard road paint.
         // Existing map has no verified original finish line or lane count.
