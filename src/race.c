@@ -423,6 +423,19 @@ void race_step(Car *player, s32 started)
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
     s32 found = track_find_road(x, z, &hit);
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Unlike the 32X staging loops, the three Genesis courses have original
+    // collision-category data AND original main-road nodes. Source asphalt
+    // pit branches can be far beyond the main route's half-width. They are
+    // legal drivable map areas, but *not* evidence of earned main-lap miles.
+    // Do not project their motion onto an unrelated racing segment and award
+    // phantom checkpoints, or show WRONG WAY using that segment's direction.
+    s32 original_branch = g->track >= TRACKS_PER_SET &&
+        g->track < TRACKS_PER_SET * 2 &&
+        (!found || hit.dist >= track_half_width(hit.seg)) &&
+        track_surface(x, z) == SURF_ROAD;
+    if (original_branch) found = 0;
+#endif
     // Ignored projection jumps can offset credit from the actual location.
     // Traffic uses the current projection, or the last one if off the road.
     s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
@@ -489,6 +502,23 @@ void race_step(Car *player, s32 started)
         g->wrong_steps = 0;
         g->wrong_way = 0;
     }
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Preserve the real point reached in a native side road for recovery.
+    // All five footprint probes must remain on source asphalt so a cliff,
+    // pit wall or unsupported edge cannot become a respawn position.
+    if (original_branch && started && !(g->total_steps & 15) &&
+        player->mode == CAR_GROUND &&
+        track_surface(x-16, z) == SURF_ROAD &&
+        track_surface(x+16, z) == SURF_ROAD &&
+        track_surface(x, z-16) == SURF_ROAD &&
+        track_surface(x, z+16) == SURF_ROAD) {
+        player->safe_x = x;
+        player->safe_z = z;
+        player->safe_heading = player->heading;
+        safe_progress = g->progress;
+        safe_d = g->last_d;
+    }
+#endif
     if (!started) return;
 
     s32 racing = g->state == RS_RACING;
