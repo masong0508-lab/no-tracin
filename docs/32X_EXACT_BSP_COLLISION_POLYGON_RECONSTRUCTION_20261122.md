@@ -42,9 +42,11 @@ The complement is:
 The source's four halfplanes are clipped to the tile using rational
 intersections (fractions), not floating guessed edges. Resulting
 polygons preserve original collision footprints exactly when tested
-at native integer sample locations. Regions may overlap; the original
-first-matching group still determines height. These regions are not
-render-ready SH-2 3D scenery.
+at native integer sample locations. Regions can overlap; **the
+original first-matching group determines height**. The private mesh
+exporter subtracts earlier accepted regions from later ones to avoid
+conflicting height-plane faces. This is a first-priority partition of
+the native collision plane, not an SH-2 scene mesh.
 
 The first-match classification is compared against the original
 source interpreter using synthetic groups and, when VR32X_ROM is
@@ -77,10 +79,16 @@ Run the read-only, supported original-ROM exporter:
 
     make vr32x-original-bsp-evidence VR32X_ROM="/private/original.32x"
 
-It writes five 2D vector SVG files and a mode audit manifest under the
+It writes five 2D vector SVG files, five priority-resolved 3D
+collision-surface OBJ files, and a mode audit manifest under the
 ignored build/vrd32x-bsp directory. The exact source-hash gate is
-mandatory. The output labels these as original 68000 BSP collision
-footprints of unnamed modes — NOT verified named original courses.
+mandatory. OBJ X/Z coordinates retain original source collision
+boundaries. The native signed height plane is extended continuously
+over its polygon faces, then divided by an explicitly **unverified**
+view-only height scale. No original 32X SH-2 display mesh, source
+material, pit/AI route, named course or calibrated height scale is
+claimed. All SVG/OBJ files are private derived materials and excluded
+from the public repository.
 
 The source-only tests use invented 28-byte boundary records; no
 commercial ROM bytes or derived authentic course files are in GitHub.
