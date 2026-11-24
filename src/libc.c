@@ -16,3 +16,8 @@ void *memcpy(void *dst, const void *src, size_t n)
     while (n--) *d++ = *s++;
     return dst;
 }
+
+// Freestanding LLVM EABI aggregate-copy aliases. GCC remains on memcpy.
+void __aeabi_memcpy(void *dst,const void *src,size_t n){ memcpy(dst,src,n); }
+void __aeabi_memcpy4(void *dst,const void *src,size_t n){ memcpy(dst,src,n); }
+void __aeabi_memcpy8(void *dst,const void *src,size_t n){ memcpy(dst,src,n); }

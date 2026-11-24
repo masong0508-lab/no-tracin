@@ -102,7 +102,8 @@ void r_init_palette(s32 theme, u16 paint);
 void r_set_paint(u16 paint);
 // Backdrop and ground colours for Freedom City or a race circuit. Takes
 // effect at the next r_init_palette.
-enum { SCENE_CITY, SCENE_FOREST, SCENE_BAY, SCENE_MOUNTAINS };
+enum { SCENE_CITY, SCENE_FOREST, SCENE_BAY, SCENE_MOUNTAINS,
+       SCENE_HIGHLAND, SCENE_DESERT };
 void r_set_scene(s32 scene);
 void r_begin(volatile u16 *page, const Camera *cam);
 // A flat polygon lying on the ground, drawn immediately in submission order.

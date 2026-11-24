@@ -4,6 +4,54 @@ A stunt-driving game for the Game Boy Advance: Race Drivin' (Genesis) mixed with
 
 The standard `notracin.gba` build uses this project's own code and assets. The optional original-course build described below imports course data from a locally supplied Virtua Racing ROM. Source ROMs and generated imported assets are kept outside the tracked source tree.
 
+## Latest owner-original 32X source-road build (Nov 22, 2026)
+
+**No reset necessary:** the five named Deluxe courses now use their **original
+ordered 68000 source road coordinates**, not synthetic road-study skeleton
+loops. The verified cartridge links the source course index to Big Forest
+(163 nodes), Bay Bridge (199), Acropolis (235), Highland (203) and Sand Park
+(191). Highland also preserves the original raised alternate BSP bridge as
+a separate driving height above its underpass. Source-road map previews
+show accurate asphalt silhouettes with a moving location dot.
+
+Build the owner-only standalone 8-environment GBA ROM using an unmodified
+verified US Sega 32X cartridge, kept outside the public Git repository:
+
+```sh
+make vr32x-owned VR32_BUILD=build/vr32x-native-route VR32_DETAIL=16 \
+  VR32X_ROM='/private/Virtua Racing Deluxe (USA).32x' -j2
+```
+
+At game selection press L/R to choose the original 32X road set, then A to
+Free Drive. The original Sega official race starts, laps, checkpoint/AI
+logic, and SH-2 scenery have **not** been reconstructed, so this build
+keeps source Free Drive distinct from the completed custom arcade races.
+The existing historical "road studies" sections later in this README
+describe earlier research, not the current restored source-coordinate mode.
+See [the complete five-course original-coordinate verification](docs/32X_ORIGINAL_ORDERED_ROAD_GEOMETRY_20261122.md),
+[Highland's original two-level bridge](docs/ORIGINAL_32X_MODE3_ALTERNATE_BRIDGE_20261122.md),
+and [the owner-only milestone record](docs/OWNER_32X_PLAYABLE_MILESTONE_20261122.md).
+
+## November 23, 2026: original 32X landscapes performance pass
+
+The optional original 32X landscape course build now eliminates empty 64-unit
+source-road patches **before** expensive height sampling and projection.
+All five owner-cartridge-derived environments drive and render faster in
+matched short mGBA tests (Big Forest 18.78→20.51, Bay Bridge 19.57→24.21,
+Acropolis 16.19→22.32, Highland 16.11→19.25, Sand Park 17.68→21.45
+rendered game FPS). Original terrain and GBA-authored scenery remain visible;
+source road/bridge collision and saves are unchanged. The private generated
+five 8192-byte culling masks occupy **only GBA ROM**; no extra framebuffer,
+heap, IWRAM or EWRAM. See
+[original-source rendering and benchmark documentation](docs/32X_SOURCE_SCENE_ROM_CULLING_FPS_PASS_20261123.md).
+
+This is not an authenticated port of the original SH-2 scene models or
+competitive start/finish/AI rules; those remain explicitly unfinished.
+
+## November 23 source-road FPS milestone
+
+The owner-private 32X landscape build now uses **ROM-only original-route ribbon geometry and conservative visibility groups**, preserving the existing 68000-authenticated road layouts, Highland bridge, and GBA-native scenery. [See reproducible source tests, pixel-identical visual comparison, unchanged driving progress, and measured five-course FPS](docs/32X_SOURCE_ROM_RIBBON_RENDER_FPS_PASS_20261123.md). This does not claim Sega SH-2 scenery or full original competitive race systems have been recovered. The commercial source ROM and owner-only generated assets are never in this public repository.
+
 ## Playing it
 - Open `notracin.gba` in a GBA emulator (Pizza Boy GBA or mGBA on Android).
 - Turn on "skip BIOS intro" if your emulator asks. The ROM header has no Nintendo logo, so the real BIOS intro won't boot it.

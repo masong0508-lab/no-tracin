@@ -8,11 +8,21 @@
 #include "tracks_dims.h"      // TRACK_HALF_W, TRACK_WORLD and the grids (from tools/mktracks.py)
 
 #define TRACKS_PER_SET 3
-enum { TRACK_SET_CUSTOM, TRACK_SET_ORIGINAL, TRACK_SET_VRD };
+enum { TRACK_SET_CUSTOM=0, TRACK_SET_ORIGINAL=1,
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    TRACK_SET_VRD=2
+#else
+    TRACK_SET_VRD=1
+#endif
+};
+#ifdef WITH_VR_ORIGINAL_TRACKS
 #define TRACK_VRD_FIRST 6
+#else
+#define TRACK_VRD_FIRST 3
+#endif
 #define TRACK_VRD_COUNT 5
 #ifdef WITH_VRD_32X_TRACKS
-#define TRACK_SET_COUNT 3
+#define TRACK_SET_COUNT (TRACK_SET_VRD + 1)
 #define TRACK_COUNT (TRACK_VRD_FIRST + TRACK_VRD_COUNT)
 #elif defined(WITH_VR_ORIGINAL_TRACKS)
 #define TRACK_SET_COUNT 2
@@ -87,6 +97,9 @@ s32  track_find(s32 x, s32 z, TrackHit *hit);
 // The four route fields match track_find(), but hit->h is zero instead of
 // elevation. Use this for physics paths that need no height lookup.
 s32  track_find_road(s32 x, s32 z, TrackHit *hit);
+// Per-side source asphalt width for optional Genesis originals; the
+// standard/custom tracks keep their existing conservative road width.
+s32  track_native_half_width(s32 seg, s32 signed_lateral);
 
 extern s16 track_pitch[];               // slope of each stretch (1024-unit angle)
 void track_load(s32 index);            // -1 goes back to the city

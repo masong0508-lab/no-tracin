@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from vr_rom import (ASPHALT, ROM_SIZE, SOLID, RomError, parse_rom,
                     physics_height_at, surface_at)
+from import_vr_original import route_records, source_preview_bits, source_road_bounds, track_header
 
 
 def synthetic_course(planes=None, rows=65):
@@ -84,6 +85,113 @@ class RomRejectionTests(unittest.TestCase):
         fake[0x1F0] = ord("U")
         with self.assertRaisesRegex(RomError, "Unsupported ROM revision"):
             parse_rom(bytes(fake))
+
+
+class OriginalAsymmetricWidthTests(unittest.TestCase):
+    def test_native_left_right_road_widths_survive_private_import(self):
+        # A purely artificial four-node square; no original donor content.
+        coords = ((0, 0), (800, 0), (800, 800), (0, 800))
+        route = [
+            dict(x=x, z=z, y=0, half_width_left=400 + i * 80,
+                 half_width_right=800 - i * 80)
+            for i, (x, z) in enumerate(coords)
+        ]
+        records, lap = route_records({"route": route})
+        self.assertEqual(lap, 800)
+        self.assertEqual([p["left"] for p in records], [100, 120, 140, 160])
+        self.assertEqual([p["right"] for p in records], [200, 180, 160, 140])
+        self.assertEqual([p["width"] for p in records], [100, 120, 140, 140])
+        dummy_courses = [{"name": name, "level": "TEST", "route": route}
+                         for name in ("BIG FOREST", "BAY BRIDGE", "ACROPOLIS")]
+        generated, _, stats = track_header(
+            {"source": {"sha256": "00" * 32}, "courses": dummy_courses}
+        )
+        self.assertIn("vr_native_left_widths[3]", generated)
+        self.assertIn("vr_native_right_widths[3]", generated)
+        self.assertIn("vr_native_route_counts[3] = { 4, 4, 4 }", generated)
+        self.assertTrue(all(row["asymmetric_native_widths_preserved"] for row in stats))
+
+
+class SourceAsphaltMapTests(unittest.TestCase):
+    """The source road mask, not a centreline, defines imported map previews."""
+
+    def test_private_import_bounds_and_production_map_pixels(self):
+        # Synthetic map: every cell is solid except two distinct patches
+        # in tile column 1. They stand for a main road and a side branch.
+        grid = [0] * 128
+        grid[1] = 1
+        tiles = [0xAA] * 128
+        patches = [(x, z) for x in (18, 19) for z in (3, 4)]
+        patches += [(x, z) for x in (22, 23) for z in (8, 9)]
+        for gx, gz in patches:
+            col = gx % 16
+            off = 64 + gz * 4 + col // 4
+            tiles[off] &= ~(3 << ((3 - col % 4) * 2))
+        terrain = {"surface_grid": grid, "surface_tiles": tiles, "surface_rows": 1}
+        bounds = source_road_bounds(terrain)
+        self.assertEqual(bounds, (80, 256, 16240, 16383))
+        with self.assertRaisesRegex(RomError, "No original asphalt"):
+            source_road_bounds({**terrain, "surface_tiles": [0xAA] * 128})
+        # Import-time raster uses the exact pixel geometry of the animated
+        # 102x68 selector but stores only 867 bytes of immutable ROM bits.
+        cached_bits = source_preview_bits({"terrain": terrain}, bounds)
+        self.assertEqual(len(cached_bits), 867)
+        self.assertTrue(any(cached_bits))
+
+        height_planes = ",".join(["0", "1", "0", "0"] * 16)
+        fixture = """
+#include "vr_original.h"
+static const u16 height_grid[128] = {0};
+static const s16 height_planes[64] = {""" + height_planes + """};
+static const u16 surface_grid[128] = {[1] = 1};
+u8 test_tiles[128] = {""" + ",".join(map(str, tiles)) + """};
+static const u8 test_preview_bits[867] = {""" + ",".join(map(str,cached_bits)) + """};
+static const VrOriginalCourse vr_original_courses[3] = {
+  {0,0,0,height_grid,height_planes,1,surface_grid,test_tiles,1,""" + ",".join(map(str, bounds)) + """,test_preview_bits}
+};
+"""
+        harness = r"""
+#include <assert.h>
+#include <string.h>
+#include "vr_original.h"
+#include "track.h"
+extern u8 test_tiles[128];
+static volatile u16 page[SCREEN_W*SCREEN_H/2];
+static u8 pixel(int x,int y) {
+    u16 v=page[(y*SCREEN_W+x)/2];
+    return x&1?(v>>8)&255:v&255;
+}
+int main(void) {
+    int drawn=0;
+    vr_original_map(page,0,18,18,100,85,7,0,0,-1,13);
+    for(int y=0;y<SCREEN_H;y++)
+        for(int x=0;x<SCREEN_W;x++) if(pixel(x,y)==7) drawn++;
+    assert(drawn>=8 && drawn<500); /* source patches, not filled tiles */
+    for(int i=0;i<128;i++)test_tiles[i]=0xAA; /* all off-road */
+    memset((void*)page,0,sizeof(page));
+    vr_original_map(page,0,18,18,100,85,7,0,0,-1,13);
+    for(int y=0;y<SCREEN_H;y++)
+        for(int x=0;x<SCREEN_W;x++) assert(pixel(x,y)!=7);
+    /* Start and moving dot still come from the original route. */
+    static const TrackPt route[1]={{144,16340,0,16384,0,80,0,0,4000,0,0}};
+    vr_original_map(page,0,18,18,100,85,7,route,1,16,13);
+    int marker=0;
+    for(int y=0;y<SCREEN_H;y++)
+        for(int x=0;x<SCREEN_W;x++) marker+=(pixel(x,y)==13);
+    assert(marker>0);
+    // The official menu viewport is cached: even though the fixture's
+    // source terrain was made entirely solid after import, this read-only
+    // ROM thumbnail must retain its original *source-backed* silhouette.
+    memset((void*)page,0,sizeof(page));
+    vr_original_map(page,0,18,18,102,68,9,0,0,-1,13);
+    int cached=0;
+    for(int y=0;y<SCREEN_H;y++)
+        for(int x=0;x<SCREEN_W;x++) cached+=(pixel(x,y)==9);
+    assert(cached>0 && cached<500);
+    return 0;
+}
+"""
+        run_host_runtime(fixture, harness)
 
 
 class TerrainFormatTests(unittest.TestCase):

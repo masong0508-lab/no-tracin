@@ -103,3 +103,45 @@ $(VRD_BUILD)/%.o: src/%.c $(wildcard src/*.h) $(VRD_HEADERS) | $(VRD_BUILD)
 
 $(VRD_BUILD):
 	mkdir -p $@
+
+# Source-authenticated 32X collision boundary evidence; NOT a playable
+# named-course import or SH-2 scenery mesh reconstruction. Files stay private
+# under ignored build/ and are generated from the owner's unmodified ROM.
+.PHONY: vr32x-original-bsp-evidence
+vr32x-original-bsp-evidence:
+	@test -n "$(VR32X_ROM)" || (echo 'Supply VR32X_ROM="/path/to/Virtua Racing Deluxe 32X (U).bin"' >&2; exit 2)
+	python3 tools/export_vrd32x_exact_bsp.py --rom "$(VR32X_ROM)" --out-dir build/vrd32x-bsp --obj
+
+# Owner-private 32X-only GBA (3 customs + 5 authenticated ROM source road
+# studies); build with the owner's exact original ROM, never commit it.
+VR32_BUILD := build/vr32x-owned
+VR32_DETAIL ?= 16
+VR32_EXACT ?= 0
+VR32_OBJS := $(patsubst build/%.o,$(VR32_BUILD)/%.o,$(OBJS)) $(VR32_BUILD)/vrd32x_study.o
+VR32_FLAGS := $(CFLAGS) -DWITH_VRD_32X_TRACKS -I$(VR32_BUILD)
+VR32_HEADERS := $(VR32_BUILD)/vrd32x_study_tracks.h $(VR32_BUILD)/vrd32x_study_data.h
+
+.PHONY: vr32x-owned
+vr32x-owned:
+	@test -n "$(VR32X_ROM)" || (echo 'Supply VR32X_ROM="/path/to/owned-original.32x"' >&2; exit 2)
+	python3 tools/import_vrd_32x_explorer.py --rom "$(VR32X_ROM)" --out-dir $(VR32_BUILD) --samples-per-cell $(VR32_DETAIL) $(if $(filter 1,$(VR32_EXACT)),--exact-mesh,)
+	$(MAKE) $(VR32_BUILD)/notracin-vr32x-owned.gba
+
+$(VR32_BUILD)/notracin-vr32x-owned.gba: $(VR32_BUILD)/notracin.elf
+	$(OBJCOPY) -O binary $< $@
+	python3 tools/fixheader.py $@
+
+$(VR32_BUILD)/notracin.elf: $(VR32_OBJS) gba.ld
+	$(CC) $(LDFLAGS) $(VR32_OBJS) -lgcc -o $@
+
+$(VR32_BUILD)/crt0.o: src/crt0.s | $(VR32_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VR32_BUILD)/fill.o: src/fill.s | $(VR32_BUILD)
+	$(CC) -mcpu=arm7tdmi -c $< -o $@
+
+$(VR32_BUILD)/%.o: src/%.c $(wildcard src/*.h) $(VR32_HEADERS) | $(VR32_BUILD)
+	$(CC) $(VR32_FLAGS) -c $< -o $@
+
+$(VR32_BUILD):
+	mkdir -p $@

@@ -46,7 +46,7 @@ class RaceFlowTests(unittest.TestCase):
                 command.append(str(ROOT / "src/track.c"))
             built = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            cases = ("study-free-drive",) if study else (("player-first", "rival-first", "tie", "prior-rival") if real_finish else CASES)
+            cases = ("study-free-drive",) if study else (("player-first", "rival-first", "tie", "prior-rival") if real_finish else CASES + (("original-branch-recovery",) if optional else ()))
             for case in cases:
                 with self.subTest(case=case):
                     run = subprocess.run([str(binary), case], capture_output=True,

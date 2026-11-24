@@ -40,7 +40,7 @@ const TrackDef *g_track;
 const char *track_set_name(s32 set)
 {
 #ifdef WITH_VRD_32X_TRACKS
-    if (set == TRACK_SET_VRD) return "32X ROAD STUDIES";
+    if (set == TRACK_SET_VRD) return "32X ORIGINAL ROADS";
 #endif
 #ifdef WITH_VR_ORIGINAL_TRACKS
     if (set == TRACK_SET_ORIGINAL) return "VR ORIGINALS";
@@ -99,6 +99,26 @@ s32 track_half_width(s32 seg)
 {
     return g_track && g_track->half_widths && seg >= 0 && seg < g_track->count
         ? g_track->half_widths[seg] : TRACK_HALF_W;
+}
+
+// A route-node's left and right original asphalt widths can differ
+// substantially, especially at turnouts and pits. Keep the narrowest
+// legacy racing lane, but distinguish a *genuine* wide side of the original
+// main route from an unrelated original pit branch. Widths live in the
+// private generated ROM-only track header.
+s32 track_native_half_width(s32 seg,s32 signed_lateral)
+{
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    s32 original=original_course();
+    if(original>=0 && seg>=0 && seg<g_track->count &&
+       seg<vr_native_route_counts[original])
+        return signed_lateral<0
+            ? vr_native_left_widths[original][seg]
+            : vr_native_right_widths[original][seg];
+#else
+    (void)signed_lateral;
+#endif
+    return track_half_width(seg);
 }
 
 static inline s32 barrier(const TrackPt *p)
@@ -1067,7 +1087,34 @@ void track_map(volatile u16 *page, s32 index, s32 x0, s32 y0, s32 w, s32 h, u8 c
     const TrackDef *t = &g_tracks[index];
 #ifdef WITH_VRD_32X_TRACKS
     if(index>=TRACK_VRD_FIRST){
-        vrd32x_study_map(page,index-TRACK_VRD_FIRST,x0,y0,w,h,color);
+        const s32 slot=index-TRACK_VRD_FIRST;
+        vrd32x_study_map(page,slot,x0,y0,w,h,color);
+        // These are original source-ordered road nodes, no longer guessed
+        // skeleton loops. Animate a compact location dot without claiming
+        // the first node is the original official race start line.
+        if(dot_d>=0 && t->lap>0){
+            s32 distance=dot_d%t->lap;
+            for(s32 i=0;i<t->count;i++){
+                const TrackPt *pt=&t->pts[i];
+                if(distance<pt->dist || distance>=pt->dist+pt->len)
+                    continue;
+                s32 step=distance-pt->dist;
+                s32 road_x=pt->x+((pt->ux*step)>>14);
+                s32 road_z=pt->z+((pt->uz*step)>>14);
+                vrd32x_study_map_marker(page,slot,x0,y0,w,h,
+                                        road_x,road_z,dot_color);
+                break;
+            }
+        }
+        return;
+    }
+#endif
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Authentic Genesis map mode: draw all original packed asphalt cells,
+    // including source pit/branch geometry, not a uniform-width route sketch.
+    if (index >= TRACKS_PER_SET && index < TRACKS_PER_SET * 2) {
+        vr_original_map(page, index - TRACKS_PER_SET, x0, y0, w, h, color,
+                        t->pts, t->count, dot_d, dot_color);
         return;
     }
 #endif

@@ -101,15 +101,15 @@ static void build_panorama(void)
     rng_state = 12345 + scene * 977;
     for (s32 x = 0; x < PANO_W; x++) {
         s32 a = (x * 1024) / PANO_W;
-        if (scene == SCENE_MOUNTAINS)
+        if (scene == SCENE_MOUNTAINS || scene == SCENE_HIGHLAND)
             far[x] = 8 + ((isin(a * 2) + isin(a * 5 + 300) / 2 + isin(a * 11 + 50) / 4 + 2 * 16384) * 3 >> 13);
-        else if (scene == SCENE_FOREST)
+        else if (scene == SCENE_FOREST || scene == SCENE_DESERT)
             far[x] = 4 + ((isin(a * 3) + isin(a * 5 + 100) + 2 * 16384) * 3 >> 14);
         else
             far[x] = 3 + ((isin(a * 3) + isin(a * 7 + 100) + 2 * 16384) >> 13);
         near[x] = 0;
     }
-    if (scene == SCENE_MOUNTAINS) {
+    if (scene == SCENE_MOUNTAINS || scene == SCENE_HIGHLAND) {
         // Jagged peaks.
         for (s32 x = 0; x < PANO_W;) {
             s32 w = 20 + rnd() % 40, h = 14 + rnd() % 17, x0 = x;
@@ -122,6 +122,14 @@ static void build_panorama(void)
         for (s32 x = 0; x < PANO_W; x++) {
             s32 a = (x * 1024) / PANO_W;
             near[x] = 3 + ((isin(a * 4 + 200) + 16384) * 7 >> 15);
+        }
+    } else if (scene == SCENE_DESERT) {
+        // Broad sandstone mesas are distinct from Acropolis peaks.
+        for(s32 x=0;x<PANO_W;){
+            s32 w=32+rnd()%68,h=9+rnd()%17,x0=x;
+            for(;x<x0+w && x<PANO_W;x++)
+                if(far[x]<h)far[x]=h;
+            x+=5+rnd()%14;
         }
     } else if (scene == SCENE_FOREST) {
         // Tree tops along the near hills.
@@ -257,8 +265,21 @@ void r_init_palette(s32 theme, u16 paint)
         [M_GRASS] = RGB15(20, 18, 9), [M_TREE] = RGB15(7, 13, 5), [M_BLD5] = RGB15(18, 14, 10),
         [M_BLD1] = RGB15(14, 9, 5), [M_BLD3] = RGB15(29, 28, 25), [M_ASPHALT] = RGB15(13, 12, 12),
     };
+    static const u16 highland[M_COUNT] = {
+        [M_GRASS] = RGB15(10, 19, 7), [M_TREE] = RGB15(4, 13, 6),
+        [M_BLD4] = RGB15(21, 19, 15),[M_BLD5] = RGB15(15, 16, 12),
+        [M_ASPHALT] = RGB15(12, 12, 14),
+    };
+    static const u16 desert[M_COUNT] = {
+        [M_GRASS] = RGB15(24, 18, 9), [M_TREE] = RGB15(13, 14, 6),
+        [M_BLD1] = RGB15(22, 12, 7), [M_BLD3] = RGB15(29, 24, 17),
+        [M_BLD4] = RGB15(29, 20, 10), [M_BLD5] = RGB15(24, 15, 9),
+        [M_ASPHALT] = RGB15(13, 12, 12),
+    };
     const u16 *over = scene == SCENE_FOREST ? forest : scene == SCENE_BAY ? bay :
-                      scene == SCENE_MOUNTAINS ? mountains : 0;
+                      scene == SCENE_MOUNTAINS ? mountains :
+                      scene == SCENE_HIGHLAND ? highland :
+                      scene == SCENE_DESERT ? desert : 0;
     static const s32 scale[4] = { 32, 26, 20, 14 };
     for (s32 m = 0; m < M_COUNT; m++) {
         u16 bc = m == M_CAR ? paint : (over && over[m]) ? over[m] : base[m];
@@ -275,11 +296,13 @@ void r_init_palette(s32 theme, u16 paint)
     // Sky: haze at the horizon up to deep blue overhead.
     for (s32 i = 0; i < SKY_STEPS; i++)
         PAL_BG[SKY_BASE + i] = mix(HAZE_R, HAZE_G, HAZE_B, t[3], t[4], t[5], (i * 32) / (SKY_STEPS - 1));
-    static const u8 skyline[4][6] = {
+    static const u8 skyline[6][6] = {
         { 14, 17, 23, 10, 12, 17 },     // city
         { 12, 17, 18,  4, 11,  5 },     // forest
         { 14, 17, 23, 10, 12, 17 },     // bay
         { 15, 15, 21, 15, 12,  8 },     // mountains
+        {  9, 16, 13,  5, 13,  8 },     // Highland green ridgelines
+        { 24, 17, 11, 18, 12,  8 },     // Sand Park ochre mesas
     };
     const u8 *sk = skyline[scene];
     PAL_BG[SKYLINE_FAR]  = mix(sk[0] * t[6] / 32, sk[1] * t[7] / 32, sk[2] * t[8] / 32, HAZE_R, HAZE_G, HAZE_B, 14);

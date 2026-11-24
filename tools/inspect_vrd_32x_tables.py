@@ -37,7 +37,9 @@ NORMAL_PAIRS = (
 )
 ALTERNATE_PAIR = (3, 0x956000, 0x9C4110)
 # Three auxiliary paged-data bases, read by scene_camera_init's C268 pointer.
-# These are NOT assumed to be the five course identities.
+# Three source data PAGE BASES, not course identities. The five normal
+# BSP table index-to-named-course identities are now independently proven
+# by tools/vrd32x_course_identity.py (68000 course selection call chain).
 AUXILIARY_PAGE_TABLE = 0x130612
 AUXILIARY_PAGE_POINTERS = (0x93061E, 0x93261E, 0x93461E)
 

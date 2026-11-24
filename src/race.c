@@ -3,6 +3,9 @@
 #include "race.h"
 #include "track.h"
 #include "world.h"
+#ifdef WITH_VRD_32X_TRACKS
+#include "vrd32x_study.h"
+#endif
 #include "game.h"
 #include "hud.h"
 #include "menu.h"
@@ -231,6 +234,10 @@ void race_begin(s32 track, s32 mode, Car *player)
     grid_slot(slot, &d, &lat);
     if (mode != RACE_ARCADE) lat = 0;
     track_point(d, lat, &x, &z, &y, &h, &hint);
+#ifdef WITH_VRD_32X_TRACKS
+    if (track>=TRACK_VRD_FIRST)
+        vrd32x_study_set_height_reference(y*256);
+#endif
     car_reset(player, x, z, h);
     g->progress = d;
     g->last_d = d + t->lap;
@@ -423,6 +430,19 @@ void race_step(Car *player, s32 started)
     TrackHit hit;
     s32 x = player->x >> 8, z = player->z >> 8;
     s32 found = track_find_road(x, z, &hit);
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Unlike the 32X staging loops, the three Genesis courses have original
+    // collision-category data AND original main-road nodes. Source asphalt
+    // pit branches can be far beyond the main route's half-width. They are
+    // legal drivable map areas, but *not* evidence of earned main-lap miles.
+    // Do not project their motion onto an unrelated racing segment and award
+    // phantom checkpoints, or show WRONG WAY using that segment's direction.
+    s32 original_branch = g->track >= TRACKS_PER_SET &&
+        g->track < TRACKS_PER_SET * 2 &&
+        (!found || hit.dist > track_native_half_width(hit.seg, hit.lat) + 16) &&
+        track_surface(x, z) == SURF_ROAD;
+    if (original_branch) found = 0;
+#endif
     // Ignored projection jumps can offset credit from the actual location.
     // Traffic uses the current projection, or the last one if off the road.
     s32 d = found ? t->pts[hit.seg].dist + hit.along : g->last_d;
@@ -451,6 +471,7 @@ void race_step(Car *player, s32 started)
                 player->safe_x = x;
                 player->safe_z = z;
                 player->safe_heading = player->heading;
+                player->safe_y = player->y;
                 safe_progress = g->progress;
                 safe_d = g->last_d;
             }
@@ -489,6 +510,23 @@ void race_step(Car *player, s32 started)
         g->wrong_steps = 0;
         g->wrong_way = 0;
     }
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    // Preserve the real point reached in a native side road for recovery.
+    // All five footprint probes must remain on source asphalt so a cliff,
+    // pit wall or unsupported edge cannot become a respawn position.
+    if (original_branch && started && !(g->total_steps & 15) &&
+        player->mode == CAR_GROUND &&
+        track_surface(x-16, z) == SURF_ROAD &&
+        track_surface(x+16, z) == SURF_ROAD &&
+        track_surface(x, z-16) == SURF_ROAD &&
+        track_surface(x, z+16) == SURF_ROAD) {
+        player->safe_x = x;
+        player->safe_z = z;
+        player->safe_heading = player->heading;
+        safe_progress = g->progress;
+        safe_d = g->last_d;
+    }
+#endif
     if (!started) return;
 
     s32 racing = g->state == RS_RACING;
@@ -637,7 +675,7 @@ void race_hud(const Car *car, s32 frame)
     s32 study = 0;
 #endif
     if(study){
-        hud_text(6,3,"32X ROAD STUDY",0,PAL_YELLOW);
+        hud_text(6,3,"32X SOURCE DRIVE",0,PAL_YELLOW);
         hud_text_right(236,3,"FREE DRIVE",0,PAL_CYAN);
         hud_text_right(236,13,"NO LAP RESULTS",0,PAL_WHITE);
     }else if (g->mode == RACE_ARCADE) {

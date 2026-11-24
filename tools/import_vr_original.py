@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from vr_rom import RomError, parse_rom
+from vr_rom import ASPHALT, RomError, parse_rom, surface_at
 
 IMPORT_VERSION = 1
 ORIGIN = 8192
@@ -56,11 +56,17 @@ def route_records(course):
         exact_length = math.hypot(dx, dz)
         length = round(exact_length)
         require(length > 0, "Quantization collapsed a route segment")
-        width = math.floor(min(source["half_width_left"], source["half_width_right"]) / DIVISOR)
+        left = math.floor(source["half_width_left"] / DIVISOR)
+        right = math.floor(source["half_width_right"] / DIVISOR)
+        width = min(left, right)
         require(width > 24, "Original route is too narrow for the current car collision radius")
+        # Keep the independent original asphalt widths for *classification*
+        # of source-backed side branches. The narrowest width remains the
+        # safe common racing lane for the existing rivals and road collision.
         records.append(dict(x=x, y=y, z=z, ux=round(dx / exact_length * 16384),
                             uz=round(dz / exact_length * 16384), length=length,
-                            distance=distance, heading=math.atan2(dx, dz), width=width))
+                            distance=distance, heading=math.atan2(dx, dz),
+                            width=width, left=left, right=right))
         distance += length
     require(distance < 65536, "Original route exceeds the current lap-distance format")
     for i, p in enumerate(records):
@@ -119,6 +125,87 @@ def face_color(course, polygon, palette):
     return min(palette, key=lambda entry: sum((entry[1][i]-target[i])**2 for i in range(3)))[0]
 
 
+def source_road_bounds(terrain):
+    """GBA-world bounds of the donor's *packed asphalt mask*, including pits.
+
+    Derive preview extents from source cells, never from a guessed centreline.
+    The original map has 128 tile columns, 16x16 two-bit cells per tile,
+    and eight GBA world units per collision cell. Only category 0 is asphalt.
+    This runs once in the private importer; no scanning or RAM cache at boot.
+    """
+    rows = terrain["surface_rows"]
+    grid = terrain["surface_grid"]
+    tiles = terrain["surface_tiles"]
+    require(len(grid) == rows * 128, "Invalid surface grid size")
+    low_x, high_x = 2048, -1
+    low_z, high_z = rows * 16, -1
+    for row in range(rows):
+        for col in range(128):
+            start = grid[row * 128 + col] * 64
+            require(start + 64 <= len(tiles), "Source surface tile outside bank")
+            for local_z in range(16):
+                for byte_x in range(4):
+                    packed = tiles[start + local_z * 4 + byte_x]
+                    if packed == 0xAA:  # four solid source cells
+                        continue
+                    for cell in range(4):
+                        if (packed >> ((3 - cell) * 2)) & 3:
+                            continue
+                        x = col * 16 + byte_x * 4 + cell
+                        z = row * 16 + local_z
+                        low_x = min(low_x, x)
+                        high_x = max(high_x, x)
+                        low_z = min(low_z, z)
+                        high_z = max(high_z, z)
+    require(high_x >= low_x and high_z >= low_z, "No original asphalt in surface grid")
+    # Keep a small framing margin. Z increases in the opposite direction
+    # to the original packed row index (see vr_original.c:raw_surface).
+    return (max(0, low_x * 8 - 64),
+            min(WORLD - 1, (high_x + 1) * 8 + 64),
+            max(0, WORLD - (high_z + 1) * 8 - 64),
+            min(WORLD - 1, WORLD - low_z * 8 + 64))
+
+
+def source_preview_bits(course, bounds, width=102, height=68):
+    """Pack a ROM-only bitmap matching the in-game source-asphalt preview.
+
+    The course-select scene redraws this map every video frame. Rendering
+    102x68 source-projection pixels with five full 2-bit mask lookups each
+    frame would waste GBA CPU time; precompute this exact projection once
+    during private source-ROM import. The moving car dot remains live.
+    """
+    require(width > 4 and height > 4, "Invalid original preview dimensions")
+    minx, maxx, minz, maxz = bounds
+    dx, dz = maxx - minx, maxz - minz
+    require(dx > 0 and dz > 0, "Invalid source asphalt preview extents")
+
+    def trunc_div(a, b):
+        # C99's signed integer division truncates toward zero.
+        return a // b if a >= 0 else -((-a) // b)
+
+    sx = dx * 256 // (width - 4)
+    sz = dz * 256 // (height - 4)
+    scale = max(1, sx, sz)
+    ox = (width - dx * 256 // scale) // 2
+    oy = (height + dz * 256 // scale) // 2
+    half = max(1, scale // 512)
+    bits = [0] * ((width * height + 7) // 8)
+
+    def asphalt(x, z):
+        return surface_at(course, (x - ORIGIN) * 2, (z - ORIGIN) * 2) == ASPHALT
+
+    for py in range(height):
+        z = minz + trunc_div((oy - py) * scale, 256)
+        for px in range(width):
+            x = minx + trunc_div((px - ox) * scale, 256)
+            if (asphalt(x, z) or asphalt(x-half, z-half)
+                    or asphalt(x+half, z-half) or asphalt(x-half, z+half)
+                    or asphalt(x+half, z+half)):
+                i = py * width + px
+                bits[i >> 3] |= 1 << (i & 7)
+    return bits
+
+
 def mesh_header(courses):
     out = ["// Generated from a locally supplied ROM. Do not commit this file.",
            "#ifndef VR_ORIGINAL_MESH_DATA_H", "#define VR_ORIGINAL_MESH_DATA_H"]
@@ -173,15 +260,21 @@ def mesh_header(courses):
         out.extend("    {"+", ".join(map(str,s))+"}," for s in sections)
         out.append("};")
         terrain=course["terrain"]
+        road_bounds=source_road_bounds(terrain)
+        preview=source_preview_bits(course,road_bounds)
+        out.append(c_array("u8",prefix+"_preview_bits",preview,32))
         out.extend((c_array("u16",prefix+"_height_grid",terrain["height_grid"]),
                     c_array("s16",prefix+"_planes",[v for p in terrain["height_planes"] for v in p]),
                     c_array("u16",prefix+"_surface_grid",terrain["surface_grid"]),
                     c_array("u8",prefix+"_surface_tiles",terrain["surface_tiles"],32)))
-        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']} }},")
+        descriptors.append(f"    {{ {prefix}_faces, {prefix}_sections, {len(sections)}, {prefix}_height_grid, {prefix}_planes, {terrain['height_rows']}, {prefix}_surface_grid, {prefix}_surface_tiles, {terrain['surface_rows']}, {', '.join(map(str, road_bounds))}, {prefix}_preview_bits }},")
         stats.append(dict(name=course["name"],source_sections=len(sections),
                           source_polygons=course["polygon_count"],rendered_polygons=len(faces),
                           unique_polygons=len(identities),duplicate_polygons=len(faces)-len(identities),
-                          source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"]))
+                          source_mesh_offset=course["mesh_offset"],source_descriptor=course["descriptor_offset"],
+                          source_asphalt_bounds_gba=list(road_bounds),
+                          source_map_preview_rom_bytes=len(preview),
+                          preview_resamples_original_asphalt=True))
     out.append("static const VrOriginalCourse vr_original_courses[3] = {")
     out.extend(descriptors);out.extend(("};","#endif",""))
     return "\n".join(out), stats
@@ -205,6 +298,8 @@ def track_header(result):
             out.append("    {"+", ".join(map(str,values))+"},")
         out.append("};")
         out.extend((c_array("u16",pre+"_widths",[p['width'] for p in records]),
+                    c_array("u16",pre+"_native_lefts",[p['left'] for p in records]),
+                    c_array("u16",pre+"_native_rights",[p['right'] for p in records]),
                     c_array("u16",pre+"_cell_first",first),c_array("u8",pre+"_cell_count",count,32),
                     c_array("u8",pre+"_cell_list",flat,32)))
         start_time=min(240,max(64,math.ceil(lap/500)))
@@ -212,7 +307,15 @@ def track_header(result):
         scene=("SCENE_FOREST","SCENE_BAY","SCENE_MOUNTAINS")[ci]
         definitions.append(f'    {{ "{course["name"]}", "{course["level"]}", {pre}_points, {len(records)}, {lap}, {pre}_cell_first, {pre}_cell_count, {pre}_cell_list, 0, 0, 0, 0, 0, 0, 0, 0, 3, {start_time}, {cp_time}, {scene}, {pre}_widths }},')
         stats.append(dict(name=course['name'],route_points=len(records),lap_world_units=lap,
-                          minimum_half_width=min(p['width'] for p in records)))
+                          minimum_half_width=min(p['width'] for p in records),
+                          asymmetric_native_widths_preserved=True,
+                          minimum_native_left_width=min(p['left'] for p in records),
+                          minimum_native_right_width=min(p['right'] for p in records)))
+    # Only the private, optional original pack uses these per-side widths.
+    # Preserve the existing TrackDef and GBA SRAM layout for every build.
+    out.append("static const u16 *const vr_native_left_widths[3] = { vr0_native_lefts, vr1_native_lefts, vr2_native_lefts };")
+    out.append("static const u16 *const vr_native_right_widths[3] = { vr0_native_rights, vr1_native_rights, vr2_native_rights };")
+    out.append("static const u8 vr_native_route_counts[3] = { "+", ".join(str(len(c["route"])) for c in result["courses"])+" };")
     out.append("#define VR_ORIGINAL_TRACK_DEFS \\")
     for i,definition in enumerate(definitions):
         out.append(definition+(" \\" if i+1<len(definitions) else ""))

@@ -21,13 +21,18 @@ const TrackDef g_tracks[TRACK_COUNT] = {
 #endif
 };
 const TrackDef *g_track;
+#ifdef WITH_VRD_32X_TRACKS
+// Route fixture has no private generated original source height data.
+s32 vrd32x_study_slot(void){return -1;}
+void vrd32x_study_set_height_reference(s32 h){(void)h;}
+#endif
 s16 track_pitch[256];
 #ifdef WITH_VR_ORIGINAL_TRACKS
 const u32 g_vr_original_pack_version = 0x11223344;
 #endif
 const Loop the_loop = {0};
 static s32 messages, saved, projection_available = 1;
-#ifdef WITH_VRD_32X_TRACKS
+#if defined(WITH_VR_ORIGINAL_TRACKS) || defined(WITH_VRD_32X_TRACKS)
 static s32 road_covered = 1;
 s32 track_surface(s32 x, s32 z)
 { (void)x; (void)z; return road_covered ? SURF_ROAD : SURF_GRASS; }
@@ -45,6 +50,8 @@ s32 track_find(s32 x, s32 z, TrackHit *hit)
 // Artificial track fixture: route-only lookup shares its known geometry.
 s32 track_find_road(s32 x, s32 z, TrackHit *hit) { return track_find(x, z, hit); }
 s32 track_half_width(s32 segment) { (void)segment; return 150; }
+s32 track_native_half_width(s32 segment, s32 lateral)
+{ (void)segment; (void)lateral; return 150; }
 s32 track_height(s32 x, s32 z) { (void)x; (void)z; return 0; }
 s32 track_height_near(s32 segment, s32 x, s32 z)
 { (void)segment; (void)x; (void)z; return 0; }
@@ -393,6 +400,46 @@ static void jump_guard(s32 course)
 }
 
 
+#ifdef WITH_VR_ORIGINAL_TRACKS
+static void original_branch_recovery(void)
+{
+    // Synthetic source asphalt and original main route: the side road
+    // is real, but its main-route projection is 1300 units away.
+    Car car = reset_case(TRACKS_PER_SET, RACE_FREE, 5000);
+    road_covered = 1;
+    car.mode = CAR_GROUND;
+    car.x = 6300 * 256;
+    car.z = 5020 * 256;
+    car.heading = 12420;
+    car.vz = -800;
+    g_race.wrong_way = 1;
+    g_race.wrong_steps = 100;
+    s32 initial_progress = g_race.progress, initial_d = g_race.last_d;
+    for (s32 i = 0; i < 16; i++) race_step(&car, 1);
+    assert(g_race.progress == initial_progress && g_race.last_d == initial_d);
+    assert(!g_race.wrong_way && !g_race.wrong_steps);
+    assert(car.safe_x == 6300 && car.safe_z == 5020);
+    assert(car.safe_heading == 12420);
+    assert(!saved && !messages);
+
+    car.x = 8000 * 256;
+    car.z = 8100 * 256;
+    car_respawn(&car);
+    assert(car.x == 6300 * 256 && car.z == 5020 * 256);
+    assert(car.heading == 12420);
+    assert(g_race.progress == initial_progress && g_race.last_d == initial_d);
+
+    // An unsupported/grass surface, even with a nearby guessed main
+    // route, must never become a new source-backed safe position.
+    road_covered = 0;
+    car.x = 6600 * 256;
+    car.z = 5400 * 256;
+    for (s32 i = 0; i < 16; i++) race_step(&car, 1);
+    assert(car.safe_x == 6300 && car.safe_z == 5020);
+    road_covered = 1;
+}
+#endif
+
 #ifdef WITH_VRD_32X_TRACKS
 static void study_free_drive(void)
 {
@@ -437,6 +484,13 @@ int main(int argc, char **argv)
     r_init();
     memset(g_tune, TUNE_STOCK, sizeof(g_tune));
     tune_apply();
+#ifdef WITH_VR_ORIGINAL_TRACKS
+    if (!strcmp(argv[1], "original-branch-recovery")) {
+        original_branch_recovery();
+        puts("PASS: original-branch-recovery");
+        return 0;
+    }
+#endif
     for (s32 set = 0; set < TRACK_SET_COUNT; set++) {
         s32 course = set * TRACKS_PER_SET;
 #ifdef WITH_VRD_32X_TRACKS
