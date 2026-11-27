@@ -19,9 +19,11 @@ from math import hypot, atan2, pi
 try:
     from tools.inspect_vrd_32x_tables import be32, translate_pointer, ROM_SHA256
     from tools.vrd32x_course_identity import verify_course_identity, COURSE_NAMES
+    from tools.vrd32x_route_layers import source_route_layers
 except ModuleNotFoundError:
     from inspect_vrd_32x_tables import be32, translate_pointer, ROM_SHA256
     from vrd32x_course_identity import verify_course_identity, COURSE_NAMES
+    from vrd32x_route_layers import source_route_layers
 
 COURSE_SCENE_TABLE = 0x18A04  # 68000 $898A04, five 20-byte descriptors
 COURSE_SCENE_ENTRY_BYTES = 20
@@ -115,6 +117,7 @@ def original_source_route(rom: bytes, slot: int, normal, alternate, min_raw: int
         raise ValueError('original road exceeds GBA u8 route node budget')
     if pitch not in (16,32):
         raise ValueError('unverified GBA native-source coordinate scale')
+    layers=source_route_layers(raw_points,normal,alternate)
     src=[]
     alt_count=0
     for i,(nx,nz) in enumerate(raw_points):
@@ -122,10 +125,10 @@ def original_source_route(rom: bytes, slot: int, normal, alternate, min_raw: int
         alt=alternate.sample_world(nx,nz) if alternate is not None else None
         if base is None and alt is None:
             raise ValueError(f'original source road vertex {i} is not on source BSP')
-        # Highland's one alternate mode-3 overpass covers a contiguous run
-        # of ORIGINAL ordered main-route points. Prefer its authentic upper
-        # surface, rather than a coincident lower road at the same X/Z.
-        layer=1 if alt is not None else 0
+        # Resolve overlaps by continuity across the closed source route.
+        # An upper surface existing above a lower road does not establish
+        # that the racing line actually uses the upper surface there.
+        layer=layers[i]
         hit=alt if layer else base
         alt_count += layer
         gx,gz=native_to_gba(nx),native_to_gba(nz)
